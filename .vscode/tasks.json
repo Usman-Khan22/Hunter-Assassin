@@ -1,0 +1,37 @@
+
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build Raylib",
+            "type": "process",
+            "command": "g++",
+            "args": [
+                "-g",
+                "-std=c++17",
+                "src/main.cpp",
+                "src/Game.cpp",
+                "src/Player.cpp",
+                "src/TileMap.cpp",
+                "src/BfsPathfinder.cpp",
+                "src/Guard.cpp",
+                "-o",
+                "${workspaceFolder}/game.exe",
+                "-ID:/raylib/src",
+                "-LD:/raylib/src",
+                "-lraylib",
+                "-lopengl32",
+                "-lgdi32",
+                "-lwinmm"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"]
+        }
+    ]
+}
