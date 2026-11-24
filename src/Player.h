@@ -10,10 +10,22 @@ public:
     void Update(float deltaTime, const TileMap& map);
     void Draw() const;
     Vector2 Position() const;
+    int Health() const;
+    bool IsExposed() const;
+    void UpdateExposure(float deltaTime, bool detected);
+    void TakeDamage();
+
+    static constexpr int MaxHealth = 3;
 
 private:
     static constexpr float Radius = 15.0f;
     static constexpr float Speed = 220.0f;
+    static constexpr float ExposedSpeedFactor = 0.8f;
+    static constexpr float ExposureDuration = 1.25f;
+    static constexpr float ImmunityDuration = 0.8f;
     Vector2 position_{};
     Vector2 facing_{0.0f, 1.0f};
+    int health_ = MaxHealth;
+    float immunity_ = 0.0f;
+    float exposure_ = 0.0f;
 };

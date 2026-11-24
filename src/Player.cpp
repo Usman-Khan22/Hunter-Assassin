@@ -6,10 +6,16 @@
 void Player::Spawn(Vector2 position) {
     position_ = position;
     facing_ = {0.0f, 1.0f};
+    health_ = MaxHealth;
+    immunity_ = 0.0f;
+    exposure_ = 0.0f;
 }
 
 // Normalize input before scaling by time, then resolve each axis to allow wall sliding.
 void Player::Update(float deltaTime, const TileMap& map) {
+    if (immunity_ > 0.0f) {
+        immunity_ -= deltaTime;
+    }
     const Vector2 input{
         static_cast<float>(IsKeyDown(KEY_D) - IsKeyDown(KEY_A)),
         static_cast<float>(IsKeyDown(KEY_S) - IsKeyDown(KEY_W))
@@ -20,7 +26,10 @@ void Player::Update(float deltaTime, const TileMap& map) {
     }
 
     facing_ = {input.x / length, input.y / length};
-    const float distance = Speed * deltaTime;
+    float distance = Speed * deltaTime;
+    if (IsExposed()) {
+        distance *= ExposedSpeedFactor;
+    }
     // Small substeps prevent tunneling and keep corner contact stable.
     const int steps = static_cast<int>(std::ceil(distance / (Radius * 0.25f)));
     const float stride = distance / steps;
@@ -38,9 +47,33 @@ void Player::Update(float deltaTime, const TileMap& map) {
 
 void Player::Draw() const {
     DrawCircleV(position_, Radius + 2.0f, Color{11, 20, 25, 255});
-    DrawCircleV(position_, Radius, Color{67, 223, 189, 255});
+    Color body{67, 223, 189, 255};
+    if (immunity_ > 0.0f) {
+        body = RAYWHITE;
+    }
+    DrawCircleV(position_, Radius, body);
     const Vector2 tip{position_.x + facing_.x * 11.0f, position_.y + facing_.y * 11.0f};
     DrawLineEx(position_, tip, 4.0f, Color{17, 55, 52, 255});
 }
 
 Vector2 Player::Position() const { return position_; }
+
+int Player::Health() const { return health_; }
+
+bool Player::IsExposed() const { return exposure_ > 0.0f; }
+
+// Refresh while any guard detects the player, then let the slowdown expire.
+void Player::UpdateExposure(float deltaTime, bool detected) {
+    if (detected) {
+        exposure_ = ExposureDuration;
+    } else if (IsExposed()) {
+        exposure_ -= deltaTime;
+    }
+}
+
+void Player::TakeDamage() {
+    if (health_ > 0 && immunity_ <= 0.0f) {
+        --health_;
+        immunity_ = ImmunityDuration;
+    }
+}

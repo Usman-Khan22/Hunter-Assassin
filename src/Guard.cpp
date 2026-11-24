@@ -50,6 +50,15 @@ bool Guard::CanSee(Vector2 player, const TileMap& map) const {
 
 // Process this frame's visibility before taking the resulting state's action.
 void Guard::Update(float deltaTime, Vector2 player, const TileMap& map, BfsPathfinder& pathfinder) {
+    if (!IsAlive()) {
+        return;
+    }
+    if (attackCooldown_ > 0.0f) {
+        attackCooldown_ -= deltaTime;
+    }
+    if (attackEffect_ > 0.0f) {
+        attackEffect_ -= deltaTime;
+    }
     const bool visible = CanSee(player, map);
     if (visible) {
         lastKnown_ = TileMap::WorldTile(player);
@@ -144,6 +153,9 @@ Color Guard::AlertColor() const {
 
 // Join neighboring wall-clipped rays to draw a translucent cone.
 void Guard::DrawVision(const TileMap& map) const {
+    if (!IsAlive()) {
+        return;
+    }
     constexpr int slices = 48;
     Color color = AlertColor();
     color.a = state_ == State::Patrol || state_ == State::Return ? 37 : 65;
@@ -159,6 +171,13 @@ void Guard::DrawVision(const TileMap& map) const {
 }
 
 void Guard::Draw() const {
+    if (!IsAlive()) {
+        return;
+    }
+    if (attackEffect_ > 0.0f) {
+        DrawCircleLines(static_cast<int>(position_.x), static_cast<int>(position_.y),
+                        AttackRange, Color{255, 112, 82, 255});
+    }
     DrawCircleV(position_, Radius + 2.0f, AlertColor());
     DrawCircleV(position_, Radius, Color{191, 55, 66, 255});
     const Vector2 tip{position_.x + std::cos(facingAngle_) * 11.0f,
@@ -184,6 +203,9 @@ const char* Guard::StateName() const {
 }
 
 void Guard::DrawDebug() const {
+    if (!IsAlive()) {
+        return;
+    }
     const Color color = AlertColor();
     Vector2 previous = position_;
     for (std::size_t i = pathIndex_; i < path_.size(); ++i) {
@@ -196,4 +218,63 @@ void Guard::DrawDebug() const {
         DrawCircleLines(static_cast<int>(center.x), static_cast<int>(center.y), 7.0f, color);
     }
     DrawText(StateName(), static_cast<int>(position_.x) + 20, static_cast<int>(position_.y) - 6, 12, color);
+}
+
+Vector2 Guard::Position() const { return position_; }
+
+bool Guard::IsAlive() const { return health_ > 0; }
+
+bool Guard::IsChasing() const { return IsAlive() && state_ == State::Chase; }
+
+// Project the guard-to-attacker direction onto the guard's forward direction.
+Guard::AttackSide Guard::ClassifyAttack(Vector2 attacker) const {
+    const Vector2 offset{attacker.x - position_.x, attacker.y - position_.y};
+    const float distance = std::hypot(offset.x, offset.y);
+    if (distance == 0.0f) {
+        return AttackSide::Front;
+    }
+    const float dot = (std::cos(facingAngle_) * offset.x +
+                       std::sin(facingAngle_) * offset.y) / distance;
+    if (dot <= -0.5f) {
+        return AttackSide::Rear;
+    }
+    if (dot >= 0.5f) {
+        return AttackSide::Front;
+    }
+    return AttackSide::Side;
+}
+
+// Surviving a knife hit alerts the guard and turns it toward the attacker.
+void Guard::TakeKnifeHit(Vector2 attacker) {
+    if (!IsAlive()) {
+        return;
+    }
+    if (ClassifyAttack(attacker) == AttackSide::Rear) {
+        health_ = 0;
+        return;
+    }
+    --health_;
+    if (IsAlive()) {
+        const float dx = attacker.x - position_.x;
+        const float dy = attacker.y - position_.y;
+        if (dx != 0.0f || dy != 0.0f) {
+            facingAngle_ = std::atan2(dy, dx);
+        }
+        lastKnown_ = TileMap::WorldTile(attacker);
+        state_ = State::Chase;
+    }
+}
+
+// A swing starts the guard's cooldown even when the player is immune.
+bool Guard::TryAttack(Vector2 player, const TileMap& map) {
+    if (!IsChasing() || attackCooldown_ > 0.0f) {
+        return false;
+    }
+    const float distance = std::hypot(player.x - position_.x, player.y - position_.y);
+    if (distance > AttackRange || !map.HasClearLine(position_, player)) {
+        return false;
+    }
+    attackCooldown_ = AttackCooldown;
+    attackEffect_ = 0.18f;
+    return true;
 }

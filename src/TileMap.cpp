@@ -114,6 +114,20 @@ Vector2 TileMap::TileCenter(TilePosition tile) {
     return {(tile.column + 0.5f) * TileSize, (tile.row + 0.5f) * TileSize};
 }
 
+// Both melee attacks use the same wall traversal as guard vision.
+bool TileMap::HasClearLine(Vector2 from, Vector2 to) const {
+    if (IsWall(WorldTile(from)) || IsWall(WorldTile(to))) {
+        return false;
+    }
+    const Vector2 offset{to.x - from.x, to.y - from.y};
+    const float distance = std::hypot(offset.x, offset.y);
+    if (distance == 0.0f) {
+        return true;
+    }
+    const Vector2 direction{offset.x / distance, offset.y / distance};
+    return RayDistance(from, direction, distance) >= distance;
+}
+
 // Advance a unit ray from tile boundary to tile boundary to find the first wall.
 float TileMap::RayDistance(Vector2 origin, Vector2 direction, float limit) const {
     TilePosition tile = WorldTile(origin);

@@ -17,16 +17,23 @@ public:
     void DrawVision(const TileMap& map) const;
     void Draw() const;
     void DrawDebug() const;
+    Vector2 Position() const;
+    bool IsAlive() const;
+    bool IsChasing() const;
+    void TakeKnifeHit(Vector2 attacker);
+    bool TryAttack(Vector2 player, const TileMap& map);
 
 private:
     enum class State { Patrol, Suspicious, Chase, Search, Return };
     enum class Navigation { Moving, Arrived, Unreachable };
+    enum class AttackSide { Front, Side, Rear };
 
     bool CanSee(Vector2 player, const TileMap& map) const;
     Navigation Navigate(TilePosition target, float distance, const TileMap& map,
                         BfsPathfinder& pathfinder);
     Color AlertColor() const;
     const char* StateName() const;
+    AttackSide ClassifyAttack(Vector2 attacker) const;
 
     static constexpr float Radius = 15.0f;
     static constexpr float PatrolSpeed = 95.0f;
@@ -35,6 +42,8 @@ private:
     static constexpr float HalfVisionAngle = 40.0f * DEG2RAD;
     static constexpr float SuspicionDuration = 0.65f;
     static constexpr float SearchDuration = 2.0f;
+    static constexpr float AttackRange = 44.0f;
+    static constexpr float AttackCooldown = 1.0f;
 
     std::vector<TilePosition> patrol_;
     std::vector<TilePosition> path_;
@@ -49,4 +58,7 @@ private:
     float searchTime_ = 0.0f;
     bool stepping_ = false;
     State state_ = State::Patrol;
+    int health_ = 2;
+    float attackCooldown_ = 0.0f;
+    float attackEffect_ = 0.0f;
 };

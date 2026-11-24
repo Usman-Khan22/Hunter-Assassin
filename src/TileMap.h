@@ -28,6 +28,7 @@ public:
     bool IsWall(int column, int row) const;
     bool IsWall(TilePosition tile) const { return IsWall(tile.column, tile.row); }
     bool CircleHitsWall(Vector2 center, float radius) const;
+    bool HasClearLine(Vector2 from, Vector2 to) const;
     float RayDistance(Vector2 origin, Vector2 direction, float limit) const;
     static TilePosition WorldTile(Vector2 world);
     static Vector2 TileCenter(TilePosition tile);
