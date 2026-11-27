@@ -52,6 +52,7 @@ private:
     std::size_t pathIndex_ = 0;
     TilePosition tile_{};
     TilePosition plannedTarget_{-1, -1};
+    unsigned int plannedRevision_ = 0;
     TilePosition lastKnown_{};
     Vector2 position_{};
     float facingAngle_ = 0.0f;

@@ -21,6 +21,8 @@ private:
     void LoadObjects(const std::filesystem::path& path);
     void LoadArtwork(const std::filesystem::path& directory);
     void DrawFacility() const;
+    int CardIndex(TilePosition tile) const;
+    void UpdateAccess(float deltaTime);
     void ResetRound();
     void Update(float deltaTime);
     void AttackWithKnife();
@@ -50,4 +52,8 @@ private:
     float knifeEffect_ = 0.0f;
     Vector2 knifeOrigin_{};
     Vector2 knifeTarget_{};
+    bool cards_[2]{};
+    int nearbyDoor_ = -1;
+    const char* accessMessage_ = "";
+    float accessMessageTime_ = 0.0f;
 };

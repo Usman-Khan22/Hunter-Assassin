@@ -113,10 +113,11 @@ void Guard::Update(float deltaTime, Vector2 player, const TileMap& map, BfsPathf
 // Follow one tile-center segment at a time so replanning starts at a known tile.
 Guard::Navigation Guard::Navigate(TilePosition target, float distance, const TileMap& map,
                                   BfsPathfinder& pathfinder) {
-    if (!stepping_ && target != plannedTarget_) {
+    if (!stepping_ && (target != plannedTarget_ || plannedRevision_ != map.WalkabilityRevision())) {
         pathfinder.FindPath(map, tile_, target, path_);
         pathIndex_ = 0;
         plannedTarget_ = target;
+        plannedRevision_ = map.WalkabilityRevision();
     }
     if (pathIndex_ == path_.size()) {
         return tile_ == target ? Navigation::Arrived : Navigation::Unreachable;

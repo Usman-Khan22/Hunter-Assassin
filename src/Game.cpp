@@ -87,12 +87,32 @@ void Game::LoadObjects(const std::filesystem::path& path) {
     if (!file.eof() || assassinCount != 1 || guardCount != GuardCount) {
         throw std::runtime_error("Facility needs one assassin and seven guards.");
     }
+    map_.ConfigureDoors();
+    int doorTiles = 0;
+    int cards = 0;
     std::vector<TilePosition> pathToObject;
     for (const FacilityObject& object : objects_) {
+        if (object.type == SecurityDoor || object.type == ExitDoor) {
+            const int door = map_.DoorAt(object.tile);
+            if (door < 0 || map_.Door(door).lockdown != (object.type == ExitDoor)) {
+                throw std::runtime_error("Door sprite does not match a logical door.");
+            }
+            ++doorTiles;
+            continue;
+        }
+        if (object.type == Card) {
+            if (CardIndex(object.tile) < 0) {
+                throw std::runtime_error("Unexpected access card location.");
+            }
+            ++cards;
+        }
         if (object.type != Crate && !pathfinder_.FindPath(map_, spawn, object.tile, pathToObject)) {
             throw std::runtime_error("Unreachable facility object at (" + std::to_string(object.tile.column) +
                                      ", " + std::to_string(object.tile.row) + ").");
         }
+    }
+    if (doorTiles != 10 || cards != 2) {
+        throw std::runtime_error("Facility needs ten door tiles and two access cards.");
     }
 }
 
@@ -114,14 +134,73 @@ void Game::LoadArtwork(const std::filesystem::path& directory) {
 void Game::DrawFacility() const {
     DrawTexture(facilityTexture_, 0, 0, WHITE);
     for (const FacilityObject& object : objects_) {
+        if (object.type == Card && cards_[CardIndex(object.tile)]) {
+            continue;
+        }
+        const int door = map_.DoorAt(object.tile);
+        if (door >= 0 && map_.Door(door).open) {
+            continue;
+        }
         if (object.type != Assassin && object.type != GuardSpawn) {
             DrawCenteredSprite(sprites_[object.type], TileMap::TileCenter(object.tile), object.rotation, WHITE);
         }
     }
 }
 
+int Game::CardIndex(TilePosition tile) const {
+    if (tile == TilePosition{47, 7}) {
+        return 0;
+    }
+    if (tile == TilePosition{25, 32}) {
+        return 1;
+    }
+    return -1;
+}
+
+void Game::UpdateAccess(float deltaTime) {
+    accessMessageTime_ -= deltaTime;
+    const Vector2 position = player_.Position();
+    for (const FacilityObject& object : objects_) {
+        if (object.type != Card) {
+            continue;
+        }
+        const int card = CardIndex(object.tile);
+        const Vector2 center = TileMap::TileCenter(object.tile);
+        if (!cards_[card] && std::hypot(center.x - position.x, center.y - position.y) <= 24.0f &&
+            map_.HasClearLine(position, center)) {
+            cards_[card] = true;
+            accessMessage_ = card == 0 ? "Card A collected" : "Card B collected";
+            accessMessageTime_ = 2.0f;
+        }
+    }
+
+    nearbyDoor_ = map_.NearbyDoor(position, 68.0f);
+    if (nearbyDoor_ < 0 || !IsKeyPressed(KEY_E)) {
+        return;
+    }
+    const FacilityDoor& door = map_.Door(nearbyDoor_);
+    if (map_.OpenDoor(nearbyDoor_, cards_[0], cards_[1])) {
+        accessMessage_ = "Access granted";
+        nearbyDoor_ = -1;
+    } else if (door.lockdown) {
+        accessMessage_ = "Final exit: lockdown active";
+    } else if (door.needsA && !cards_[0] && door.needsB && !cards_[1]) {
+        accessMessage_ = "Access denied: cards A and B required";
+    } else if (door.needsA && !cards_[0]) {
+        accessMessage_ = "Access denied: card A required";
+    } else {
+        accessMessage_ = "Access denied: card B required";
+    }
+    accessMessageTime_ = 2.0f;
+}
+
 // Recreate round state while keeping the loaded map and open window.
 void Game::ResetRound() {
+    map_.ResetDoors();
+    cards_[0] = cards_[1] = false;
+    nearbyDoor_ = -1;
+    accessMessage_ = "";
+    accessMessageTime_ = 0.0f;
     // Three waypoints after each spawn, in the guard order from objects.txt.
     constexpr TilePosition waypoints[GuardCount][3]{
         {{20, 10}, {20, 11}, {25, 11}},
@@ -162,6 +241,7 @@ void Game::Update(float deltaTime) {
     }
 
     player_.Update(deltaTime, map_);
+    UpdateAccess(deltaTime);
     if (knifeCooldown_ > 0.0f) {
         knifeCooldown_ -= deltaTime;
     }
@@ -266,8 +346,8 @@ void Game::Render() const {
     EndMode2D();
 
     constexpr Color panel{13, 19, 25, 235};
-    constexpr int hudY = ScreenHeight - 92;
-    DrawRectangle(16, hudY, 278, 76, panel);
+    constexpr int hudY = ScreenHeight - 116;
+    DrawRectangle(16, hudY, 278, 100, panel);
     DrawText(TextFormat("HEALTH  %d / %d", player_.Health(), Player::MaxHealth),
              28, hudY + 11, 18, RAYWHITE);
     for (int point = 0; point < Player::MaxHealth; ++point) {
@@ -278,6 +358,16 @@ void Game::Render() const {
         DrawRectangle(174 + point * 22, hudY + 13, 15, 14, color);
     }
     DrawText("Objective: Find an escape", 28, hudY + 42, 18, RAYWHITE);
+    const int cardCount = static_cast<int>(cards_[0]) + static_cast<int>(cards_[1]);
+    DrawText(TextFormat("ACCESS CARDS: %d/2", cardCount), 28, hudY + 68, 18, RAYWHITE);
+    if (player_.Health() > 0) {
+        if (nearbyDoor_ >= 0) {
+            DrawText("E  Interact with door", 320, ScreenHeight - 40, 18, RAYWHITE);
+        }
+        if (accessMessageTime_ > 0.0f) {
+            DrawText(accessMessage_, 320, ScreenHeight - 68, 18, RAYWHITE);
+        }
+    }
     if (player_.IsExposed() && player_.Health() > 0) {
         DrawRectangle(16, hudY - 36, 118, 29, panel);
         DrawText("EXPOSED", 28, hudY - 31, 18, Color{255, 112, 82, 255});

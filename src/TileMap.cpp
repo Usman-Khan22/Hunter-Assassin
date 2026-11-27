@@ -61,6 +61,9 @@ void TileMap::LoadGrid(const std::filesystem::path& path, bool facility) {
     }
     tiles_.swap(tiles);
     crates_.assign(Width() * Height(), 0);
+    doorIndex_.Clear();
+    ResetDoors();
+    ++walkabilityRevision_;
     spawn_ = spawn;
 }
 
@@ -76,9 +79,88 @@ int TileMap::Width() const { return tiles_.empty() ? 0 : static_cast<int>(tiles_
 int TileMap::Height() const { return static_cast<int>(tiles_.size()); }
 
 bool TileMap::IsWall(int column, int row) const {
-    return column < 0 || row < 0 || column >= Width() || row >= Height() ||
-           tiles_[row][column] == '#' || tiles_[row][column] == 'W' ||
-           crates_[row * Width() + column] != 0;
+    return IsBlocked(column, row, -1);
+}
+
+bool TileMap::IsBlocked(int column, int row, int ignoredDoor) const {
+    if (column < 0 || row < 0 || column >= Width() || row >= Height() ||
+        tiles_[row][column] == '#' || tiles_[row][column] == 'W' ||
+        crates_[row * Width() + column] != 0) {
+        return true;
+    }
+    const int door = doorIndex_.Find(row * Width() + column);
+    return door >= 0 && door != ignoredDoor && !doors_[door].open;
+}
+
+void TileMap::ConfigureDoors() {
+    doorIndex_.Clear();
+    ResetDoors();
+    for (int index = 0; index < DoorCount; ++index) {
+        for (const TilePosition tile : doors_[index].tiles) {
+            if (IsWall(tile) || !doorIndex_.Insert(tile.row * Width() + tile.column, index)) {
+                throw std::runtime_error("Invalid logical door location.");
+            }
+        }
+    }
+    ++walkabilityRevision_;
+}
+
+int TileMap::DoorAt(TilePosition tile) const {
+    if (tile.column < 0 || tile.row < 0 || tile.column >= Width() || tile.row >= Height()) {
+        return -1;
+    }
+    return doorIndex_.Find(tile.row * Width() + tile.column);
+}
+
+const FacilityDoor& TileMap::Door(int index) const { return doors_[index]; }
+
+bool TileMap::OpenDoor(int index, bool hasA, bool hasB) {
+    FacilityDoor& door = doors_[index];
+    if (door.open || door.lockdown || (door.needsA && !hasA) || (door.needsB && !hasB)) {
+        return false;
+    }
+    door.open = true;
+    ++walkabilityRevision_;
+    return true;
+}
+
+void TileMap::ResetDoors() {
+    for (FacilityDoor& door : doors_) {
+        if (door.open) {
+            door.open = false;
+            ++walkabilityRevision_;
+        }
+    }
+}
+
+unsigned int TileMap::WalkabilityRevision() const { return walkabilityRevision_; }
+
+// Ignore only the candidate doorway in this interaction ray.
+int TileMap::NearbyDoor(Vector2 position, float range) const {
+    const TilePosition first = WorldTile({position.x - range, position.y - range});
+    const TilePosition last = WorldTile({position.x + range, position.y + range});
+    int nearest = -1;
+    float best = range;
+    for (int row = first.row; row <= last.row; ++row) {
+        for (int column = first.column; column <= last.column; ++column) {
+            const int door = DoorAt({column, row});
+            if (door < 0 || doors_[door].open) {
+                continue;
+            }
+            const Vector2 center = TileCenter({column, row});
+            const float dx = center.x - position.x;
+            const float dy = center.y - position.y;
+            const float distance = std::hypot(dx, dy);
+            if (distance > best || distance == 0.0f) {
+                continue;
+            }
+            if (RayDistance(position, {dx / distance, dy / distance}, distance, door) >= distance) {
+                best = distance;
+                nearest = door;
+            }
+        }
+    }
+    return nearest;
 }
 
 // Restrict collision checks to tiles that overlap the circle's bounding box.
@@ -169,9 +251,9 @@ bool TileMap::HasClearLine(Vector2 from, Vector2 to) const {
 }
 
 // Advance a unit ray from tile boundary to tile boundary to find the first wall.
-float TileMap::RayDistance(Vector2 origin, Vector2 direction, float limit) const {
+float TileMap::RayDistance(Vector2 origin, Vector2 direction, float limit, int ignoredDoor) const {
     TilePosition tile = WorldTile(origin);
-    if (IsWall(tile)) {
+    if (IsBlocked(tile.column, tile.row, ignoredDoor)) {
         return 0.0f;
     }
 
@@ -189,7 +271,8 @@ float TileMap::RayDistance(Vector2 origin, Vector2 direction, float limit) const
     while (std::min(nextX, nextY) < limit) {
         const float distance = std::min(nextX, nextY);
         if (std::abs(nextX - nextY) < 0.0001f) {
-            if (IsWall(tile.column + stepX, tile.row) || IsWall(tile.column, tile.row + stepY)) {
+            if (IsBlocked(tile.column + stepX, tile.row, ignoredDoor) ||
+                IsBlocked(tile.column, tile.row + stepY, ignoredDoor)) {
                 return distance;
             }
             tile.column += stepX;
@@ -203,7 +286,7 @@ float TileMap::RayDistance(Vector2 origin, Vector2 direction, float limit) const
             tile.row += stepY;
             nextY += deltaY;
         }
-        if (IsWall(tile)) {
+        if (IsBlocked(tile.column, tile.row, ignoredDoor)) {
             return distance;
         }
     }
