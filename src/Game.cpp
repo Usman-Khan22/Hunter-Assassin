@@ -239,17 +239,21 @@ void Game::UpdateAccess(float deltaTime) {
         return;
     }
     const FacilityDoor& door = map_.Door(nearbyDoor_);
-    if (map_.OpenDoor(nearbyDoor_, cards_[0], cards_[1])) {
-        accessMessage_ = "Access granted";
-        nearbyDoor_ = -1;
-    } else if (door.lockdown) {
-        accessMessage_ = lockdownDisabled_ ? "Final exit remains sealed" : "Final exit: lockdown active";
-    } else if (door.needsA && !cards_[0] && door.needsB && !cards_[1]) {
+    if (door.needsA && !cards_[0] && door.needsB && !cards_[1]) {
         accessMessage_ = "Access denied: cards A and B required";
     } else if (door.needsA && !cards_[0]) {
         accessMessage_ = "Access denied: card A required";
-    } else {
+    } else if (door.needsB && !cards_[1]) {
         accessMessage_ = "Access denied: card B required";
+    } else if (door.lockdown) {
+        if (lockdownDisabled_) {
+            pendingExit_ = nearbyDoor_;
+            return;
+        }
+        accessMessage_ = "Final exit: lockdown active";
+    } else if (map_.OpenDoor(nearbyDoor_, cards_[0], cards_[1])) {
+        accessMessage_ = "Access granted";
+        nearbyDoor_ = -1;
     }
     accessMessageTime_ = 2.0f;
 }
@@ -295,6 +299,10 @@ void Game::UpdateTerminal() {
 
 // Recreate round state while keeping the loaded map and open window.
 void Game::ResetRound() {
+    missionState_ = Active;
+    defeatReason_ = Eliminated;
+    timeRemaining_ = MissionDuration;
+    pendingExit_ = -1;
     map_.ResetDoors();
     cards_[0] = cards_[1] = false;
     nearbyDoor_ = -1;
@@ -332,6 +340,13 @@ void Game::ResetRound() {
     camera_.target = ClampCameraTarget(player_.Position());
 }
 
+void Game::EndMission(MissionState result) {
+    missionState_ = result;
+    pendingExit_ = -1;
+    nearbyDoor_ = -1;
+    CloseTerminal();
+}
+
 void Game::Update(float deltaTime) {
     const bool terminalWasOpen = activeTerminal_ != NoTerminal;
     const bool escape = IsKeyPressed(KEY_ESCAPE);
@@ -345,10 +360,22 @@ void Game::Update(float deltaTime) {
     if (IsKeyPressed(KEY_F3)) {
         debugVisible_ = !debugVisible_;
     }
-    if (player_.Health() == 0) {
+    if (missionState_ != Active) {
         if (IsKeyPressed(KEY_R)) {
             ResetRound();
         }
+        return;
+    }
+    pendingExit_ = -1;
+    timeRemaining_ -= deltaTime;
+    if (timeRemaining_ <= 0.0) {
+        timeRemaining_ = 0.0;
+        defeatReason_ = TimeExpired;
+        EndMission(Defeat);
+        return;
+    }
+    if (player_.Health() == 0) {
+        EndMission(Defeat);
         return;
     }
 
@@ -386,11 +413,18 @@ void Game::Update(float deltaTime) {
                 CloseTerminal();
             }
             if (player_.Health() == 0) {
+                EndMission(Defeat);
                 return;
             }
         }
     }
     player_.UpdateExposure(deltaTime, detected);
+
+    // Commit escape only after this frame's timer and guard attacks have resolved.
+    if (pendingExit_ >= 0 && map_.OpenDoor(pendingExit_, cards_[0], cards_[1], lockdownDisabled_)) {
+        EndMission(Victory);
+        return;
+    }
 
     const Vector2 target = ClampCameraTarget(player_.Position());
     // Exponential interpolation keeps the camera response consistent across frame rates.
@@ -469,6 +503,7 @@ void Game::Render() const {
     }
     EndMode2D();
 
+    DrawTimer();
     constexpr Color panel{13, 19, 25, 235};
     constexpr int hudY = ScreenHeight - 160;
     DrawRectangle(16, hudY, 278, 144, panel);
@@ -491,11 +526,15 @@ void Game::Render() const {
     } else {
         DrawText("LOCKDOWN ACTIVE", 28, hudY + 112, 18, Color{232, 201, 115, 255});
     }
-    if (player_.Health() > 0) {
+    if (missionState_ == Active) {
         if (activeTerminal_ == NoTerminal && nearbyTerminal_ != NoTerminal) {
             DrawText("E  Use terminal", 320, ScreenHeight - 40, 18, RAYWHITE);
         } else if (activeTerminal_ == NoTerminal && nearbyDoor_ >= 0) {
-            DrawText("E  Interact with door", 320, ScreenHeight - 40, 18, RAYWHITE);
+            const char* prompt = "E  Interact with door";
+            if (map_.Door(nearbyDoor_).lockdown) {
+                prompt = "E  Use final exit";
+            }
+            DrawText(prompt, 320, ScreenHeight - 40, 18, RAYWHITE);
         }
         if (accessMessageTime_ > 0.0f) {
             Color messageColor = RAYWHITE;
@@ -505,7 +544,7 @@ void Game::Render() const {
             DrawText(accessMessage_, 320, ScreenHeight - 68, 18, messageColor);
         }
     }
-    if (player_.IsExposed() && player_.Health() > 0) {
+    if (player_.IsExposed() && missionState_ == Active) {
         DrawRectangle(16, hudY - 36, 118, 29, panel);
         DrawText("EXPOSED", 28, hudY - 31, 18, Color{255, 112, 82, 255});
     }
@@ -523,14 +562,65 @@ void Game::Render() const {
     if (activeTerminal_ != NoTerminal) {
         DrawTerminal();
     }
-    if (player_.Health() == 0) {
-        DrawRectangle(0, 0, ScreenWidth, ScreenHeight, Color{13, 19, 25, 225});
-        DrawText("DEFEAT", (ScreenWidth - MeasureText("DEFEAT", 48)) / 2,
-                 ScreenHeight / 2 - 56, 48, RAYWHITE);
-        DrawText("Press R to restart", (ScreenWidth - MeasureText("Press R to restart", 22)) / 2,
-                 ScreenHeight / 2 + 12, 22, RAYWHITE);
+    if (missionState_ != Active) {
+        DrawMissionResult();
     }
     EndDrawing();
+}
+
+int Game::SecondsRemaining() const {
+    // Show 00:01 while any fraction of the last second remains.
+    return static_cast<int>(std::ceil(timeRemaining_));
+}
+
+void Game::DrawTimer() const {
+    Color color = RAYWHITE;
+    if (timeRemaining_ <= 30.0) {
+        color = Color{252, 115, 120, 255};
+    } else if (timeRemaining_ <= 60.0) {
+        color = Color{245, 211, 119, 255};
+    }
+    const int seconds = SecondsRemaining();
+    const char* time = TextFormat("%02d:%02d", seconds / 60, seconds % 60);
+    DrawRectangle(ScreenWidth / 2 - 64, 16, 128, 42, Color{13, 19, 25, 235});
+    DrawText(time, (ScreenWidth - MeasureText(time, 26)) / 2, 24, 26, color);
+}
+
+void Game::DrawMissionResult() const {
+    const int seconds = SecondsRemaining();
+    const int elapsed = MissionDuration - seconds;
+    int eliminated = 0;
+    for (const Guard& guard : guards_) {
+        if (!guard.IsAlive()) {
+            ++eliminated;
+        }
+    }
+    const int cardCount = static_cast<int>(cards_[0]) + static_cast<int>(cards_[1]);
+    constexpr Color teal{82, 225, 207, 255};
+    DrawRectangle(0, 0, ScreenWidth, ScreenHeight, Color{13, 19, 25, 225});
+    DrawRectangle(360, 124, 560, 470, Color{20, 29, 43, 255});
+    if (missionState_ == Victory) {
+        DrawText("MISSION COMPLETE", 400, 154, 38, teal);
+        DrawText("You escaped Nexus-7.", 400, 213, 23, RAYWHITE);
+        DrawText("PROTOCOL ZERO OVERRIDDEN", 400, 249, 20, Color{92, 222, 150, 255});
+    } else {
+        DrawText("MISSION FAILED", 400, 154, 38, Color{252, 115, 120, 255});
+        const char* cause = "ASSASSIN ELIMINATED";
+        if (defeatReason_ == TimeExpired) {
+            cause = "TIME EXPIRED";
+        }
+        DrawText(cause, 400, 213, 23, RAYWHITE);
+    }
+    DrawText(TextFormat("Time remaining   %02d:%02d", seconds / 60, seconds % 60), 400, 305, 20, RAYWHITE);
+    DrawText(TextFormat("Time taken       %02d:%02d", elapsed / 60, elapsed % 60), 400, 337, 20, RAYWHITE);
+    DrawText(TextFormat("Guards eliminated   %d/%d", eliminated, GuardCount), 400, 369, 20, RAYWHITE);
+    DrawText(TextFormat("Health remaining    %d/%d", player_.Health(), Player::MaxHealth), 400, 401, 20, RAYWHITE);
+    DrawText(TextFormat("Access cards        %d/2", cardCount), 400, 433, 20, RAYWHITE);
+    const char* controls = "R  Retry     ESC  Quit";
+    if (missionState_ == Victory) {
+        controls = "R  Restart     ESC  Quit";
+    }
+    DrawText(controls, 400, 526, 20, teal);
 }
 
 void Game::DrawTerminal() const {

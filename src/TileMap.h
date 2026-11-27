@@ -37,7 +37,7 @@ public:
     void ConfigureDoors();
     int DoorAt(TilePosition tile) const;
     const FacilityDoor& Door(int index) const;
-    bool OpenDoor(int index, bool hasA, bool hasB);
+    bool OpenDoor(int index, bool hasA, bool hasB, bool lockdownDisabled = false);
     void ResetDoors();
     unsigned int WalkabilityRevision() const;
     int NearbyDoor(Vector2 position, float range, float* distance = nullptr) const;

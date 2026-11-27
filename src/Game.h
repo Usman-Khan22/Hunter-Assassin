@@ -12,6 +12,8 @@ public:
 private:
     enum ObjectType { Assassin, GuardSpawn, Crate, SecurityDoor, ExitDoor, Terminal, Card, ObjectTypeCount };
     enum TerminalId { NoTerminal, Servers, Security, Control };
+    enum MissionState { Active, Victory, Defeat };
+    enum DefeatReason { Eliminated, TimeExpired };
     struct FacilityObject {
         ObjectType type;
         TilePosition tile;
@@ -28,6 +30,10 @@ private:
     void UpdateTerminal();
     void CloseTerminal();
     void DrawTerminal() const;
+    void EndMission(MissionState result);
+    int SecondsRemaining() const;
+    void DrawTimer() const;
+    void DrawMissionResult() const;
     void ResetRound();
     void Update(float deltaTime);
     void AttackWithKnife();
@@ -41,6 +47,7 @@ private:
     static constexpr float KnifeRange = 52.0f;
     static constexpr float KnifeCooldown = 0.45f;
     static constexpr int GuardCount = 7;
+    static constexpr int MissionDuration = 360;
     static constexpr const char* ObjectNames[ObjectTypeCount]{
         "assassin", "guard", "cargo_crate", "security_door", "exit_door", "security_terminal", "access_card"
     };
@@ -69,4 +76,8 @@ private:
     int passwordLength_ = 0;
     bool passwordDenied_ = false;
     bool exitRequested_ = false;
+    MissionState missionState_ = Active;
+    DefeatReason defeatReason_ = Eliminated;
+    double timeRemaining_ = MissionDuration;
+    int pendingExit_ = -1;
 };

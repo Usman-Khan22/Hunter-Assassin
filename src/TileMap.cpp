@@ -114,9 +114,10 @@ int TileMap::DoorAt(TilePosition tile) const {
 
 const FacilityDoor& TileMap::Door(int index) const { return doors_[index]; }
 
-bool TileMap::OpenDoor(int index, bool hasA, bool hasB) {
+bool TileMap::OpenDoor(int index, bool hasA, bool hasB, bool lockdownDisabled) {
     FacilityDoor& door = doors_[index];
-    if (door.open || door.lockdown || (door.needsA && !hasA) || (door.needsB && !hasB)) {
+    if (door.open || (door.lockdown && !lockdownDisabled) ||
+        (door.needsA && !hasA) || (door.needsB && !hasB)) {
         return false;
     }
     door.open = true;
