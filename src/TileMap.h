@@ -22,6 +22,8 @@ public:
     static constexpr int TileSize = 48;
 
     void Load(const std::filesystem::path& path);
+    void LoadFacility(const std::filesystem::path& path);
+    void AddCrate(TilePosition tile);
     Vector2 Spawn() const;
     int Width() const;
     int Height() const;
@@ -36,6 +38,8 @@ public:
     void DrawGrid() const;
 
 private:
+    void LoadGrid(const std::filesystem::path& path, bool facility);
     std::vector<std::string> tiles_;
+    std::vector<unsigned char> crates_;
     Vector2 spawn_{};
 };

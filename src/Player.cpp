@@ -1,11 +1,13 @@
 #include "Player.h"
+#include "Artwork.h"
 #include "TileMap.h"
 
 #include <cmath>
 
-void Player::Spawn(Vector2 position) {
+void Player::Spawn(Vector2 position, float rotation) {
     position_ = position;
-    facing_ = {0.0f, 1.0f};
+    const float angle = rotation * DEG2RAD;
+    facing_ = {std::cos(angle), std::sin(angle)};
     health_ = MaxHealth;
     immunity_ = 0.0f;
     exposure_ = 0.0f;
@@ -45,7 +47,15 @@ void Player::Update(float deltaTime, const TileMap& map) {
     }
 }
 
-void Player::Draw() const {
+void Player::Draw(Texture2D texture) const {
+    if (texture.id != 0) {
+        Color tint = WHITE;
+        if (immunity_ > 0.0f) {
+            tint = Color{255, 155, 155, 255};
+        }
+        DrawCenteredSprite(texture, position_, std::atan2(facing_.y, facing_.x) * RAD2DEG, tint);
+        return;
+    }
     DrawCircleV(position_, Radius + 2.0f, Color{11, 20, 25, 255});
     Color body{67, 223, 189, 255};
     if (immunity_ > 0.0f) {

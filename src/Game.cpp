@@ -1,8 +1,11 @@
 #include "Game.h"
+#include "Artwork.h"
 
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <stdexcept>
 
 void Game::Run() {
@@ -14,29 +17,134 @@ void Game::Run() {
     Shutdown();
 }
 
-// Validate the map and patrol routes before opening the game window.
 void Game::Initialize() {
-    map_.Load(std::filesystem::u8path(GetApplicationDirectory()) / "maps" / "test_map.txt");
+    const auto assets = std::filesystem::u8path(GetApplicationDirectory()) / "assets";
+    map_.LoadFacility(assets / "maps" / "facility.txt");
+    LoadObjects(assets / "maps" / "objects.txt");
     camera_.offset = {ScreenWidth / 2.0f, ScreenHeight / 2.0f};
-    camera_.zoom = 1.0f;
+    camera_.zoom = CameraZoom;
     ResetRound();
 
     InitWindow(ScreenWidth, ScreenHeight, "Hunter's Assassin");
     if (!IsWindowReady()) {
         throw std::runtime_error("Unable to initialize the game window.");
     }
+    try {
+        LoadArtwork(assets / "png");
+    } catch (...) {
+        Shutdown();
+        throw;
+    }
     SetTargetFPS(60);
+}
+
+// Apply crate occupancy before checking that every placement is accessible.
+void Game::LoadObjects(const std::filesystem::path& path) {
+    std::ifstream file(path);
+    if (!file) {
+        throw std::runtime_error("Unable to open facility objects: " + path.string());
+    }
+    objects_.clear();
+    int assassinCount = 0;
+    int guardCount = 0;
+    TilePosition spawn{};
+    int lineNumber = 0;
+    std::string line;
+    while (std::getline(file, line)) {
+        ++lineNumber;
+        std::istringstream fields(line);
+        std::string name;
+        if (!(fields >> name) || name.front() == '#') {
+            continue;
+        }
+        const std::string location = " on objects.txt line " + std::to_string(lineNumber);
+        int type = 0;
+        while (type < ObjectTypeCount && name != ObjectNames[type]) {
+            ++type;
+        }
+        TilePosition tile{};
+        float rotation = 0.0f;
+        std::string extra;
+        if (type == ObjectTypeCount || !(fields >> tile.column >> tile.row >> rotation) ||
+            (fields >> extra) || !std::isfinite(rotation) || map_.IsWall(tile)) {
+            throw std::runtime_error("Invalid facility object" + location);
+        }
+        for (const FacilityObject& object : objects_) {
+            if (object.tile == tile) {
+                throw std::runtime_error("Overlapping facility objects" + location);
+            }
+        }
+        objects_.push_back({static_cast<ObjectType>(type), tile, rotation});
+        if (type == Assassin) {
+            ++assassinCount;
+            spawn = tile;
+        } else if (type == GuardSpawn) {
+            ++guardCount;
+        } else if (type == Crate) {
+            map_.AddCrate(tile);
+        }
+    }
+    if (!file.eof() || assassinCount != 1 || guardCount != GuardCount) {
+        throw std::runtime_error("Facility needs one assassin and seven guards.");
+    }
+    std::vector<TilePosition> pathToObject;
+    for (const FacilityObject& object : objects_) {
+        if (object.type != Crate && !pathfinder_.FindPath(map_, spawn, object.tile, pathToObject)) {
+            throw std::runtime_error("Unreachable facility object at (" + std::to_string(object.tile.column) +
+                                     ", " + std::to_string(object.tile.row) + ").");
+        }
+    }
+}
+
+void Game::LoadArtwork(const std::filesystem::path& directory) {
+    facilityTexture_ = LoadTexture((directory / "facility_base.png").string().c_str());
+    if (facilityTexture_.id == 0 || facilityTexture_.width != map_.Width() * TileMap::TileSize ||
+        facilityTexture_.height != map_.Height() * TileMap::TileSize) {
+        throw std::runtime_error("Facility artwork must match the grid's world dimensions.");
+    }
+    for (int type = 0; type < ObjectTypeCount; ++type) {
+        const std::string name = std::string(ObjectNames[type]) + ".png";
+        sprites_[type] = LoadTexture((directory / name).string().c_str());
+        if (sprites_[type].id == 0) {
+            throw std::runtime_error("Unable to load facility sprite: " + name);
+        }
+    }
+}
+
+void Game::DrawFacility() const {
+    DrawTexture(facilityTexture_, 0, 0, WHITE);
+    for (const FacilityObject& object : objects_) {
+        if (object.type != Assassin && object.type != GuardSpawn) {
+            DrawCenteredSprite(sprites_[object.type], TileMap::TileCenter(object.tile), object.rotation, WHITE);
+        }
+    }
 }
 
 // Recreate round state while keeping the loaded map and open window.
 void Game::ResetRound() {
-    player_.Spawn(map_.Spawn());
+    // Three waypoints after each spawn, in the guard order from objects.txt.
+    constexpr TilePosition waypoints[GuardCount][3]{
+        {{20, 10}, {20, 11}, {25, 11}},
+        {{12, 23}, {12, 24}, {6, 24}},
+        {{33, 21}, {34, 21}, {34, 13}},
+        {{24, 17}, {24, 14}, {17, 14}},
+        {{39, 5}, {39, 2}, {44, 2}},
+        {{37, 26}, {38, 26}, {38, 32}},
+        {{7, 30}, {7, 32}, {5, 32}}
+    };
     guards_.clear();
-    guards_.reserve(2);
-    guards_.emplace_back(map_, pathfinder_,
-        std::initializer_list<TilePosition>{{7, 2}, {7, 6}, {11, 6}, {11, 2}, {3, 2}});
-    guards_.emplace_back(map_, pathfinder_,
-        std::initializer_list<TilePosition>{{18, 8}, {23, 8}, {26, 12}, {27, 12}, {27, 5}, {19, 5}});
+    guards_.reserve(GuardCount);
+    int guardIndex = 0;
+    for (const FacilityObject& object : objects_) {
+        if (object.type == Assassin) {
+            player_.Spawn(TileMap::TileCenter(object.tile), object.rotation);
+        } else if (object.type == GuardSpawn) {
+            const TilePosition* route = waypoints[guardIndex++];
+            guards_.emplace_back(map_, pathfinder_,
+                std::initializer_list<TilePosition>{object.tile, route[0], route[1], route[2]});
+            guards_.back().SetFacing(object.rotation);
+        }
+    }
     knifeCooldown_ = 0.0f;
     knifeEffect_ = 0.0f;
     camera_.target = ClampCameraTarget(player_.Position());
@@ -136,7 +244,7 @@ void Game::Render() const {
     ClearBackground(Color{16, 21, 27, 255});
 
     BeginMode2D(camera_);
-    map_.Draw();
+    DrawFacility();
     for (const Guard& guard : guards_) {
         guard.DrawVision(map_);
     }
@@ -147,9 +255,9 @@ void Game::Render() const {
         }
     }
     for (const Guard& guard : guards_) {
-        guard.Draw();
+        guard.Draw(sprites_[GuardSpawn]);
     }
-    player_.Draw();
+    player_.Draw(sprites_[Assassin]);
     if (knifeEffect_ > 0.0f) {
         const Color slash{255, 225, 139, 255};
         DrawCircleLines(static_cast<int>(knifeOrigin_.x), static_cast<int>(knifeOrigin_.y), 24.0f, slash);
@@ -196,5 +304,13 @@ void Game::Render() const {
 }
 
 void Game::Shutdown() {
+    for (const Texture2D texture : sprites_) {
+        if (texture.id != 0) {
+            UnloadTexture(texture);
+        }
+    }
+    if (facilityTexture_.id != 0) {
+        UnloadTexture(facilityTexture_);
+    }
     CloseWindow();
 }

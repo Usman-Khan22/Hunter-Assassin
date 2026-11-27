@@ -1,4 +1,5 @@
 #include "Guard.h"
+#include "Artwork.h"
 #include "BfsPathfinder.h"
 
 #include <algorithm>
@@ -170,7 +171,7 @@ void Guard::DrawVision(const TileMap& map) const {
     }
 }
 
-void Guard::Draw() const {
+void Guard::Draw(Texture2D texture) const {
     if (!IsAlive()) {
         return;
     }
@@ -178,11 +179,15 @@ void Guard::Draw() const {
         DrawCircleLines(static_cast<int>(position_.x), static_cast<int>(position_.y),
                         AttackRange, Color{255, 112, 82, 255});
     }
-    DrawCircleV(position_, Radius + 2.0f, AlertColor());
-    DrawCircleV(position_, Radius, Color{191, 55, 66, 255});
-    const Vector2 tip{position_.x + std::cos(facingAngle_) * 11.0f,
-                      position_.y + std::sin(facingAngle_) * 11.0f};
-    DrawLineEx(position_, tip, 4.0f, Color{55, 19, 27, 255});
+    if (texture.id != 0) {
+        DrawCenteredSprite(texture, position_, facingAngle_ * RAD2DEG, WHITE);
+    } else {
+        DrawCircleV(position_, Radius + 2.0f, AlertColor());
+        DrawCircleV(position_, Radius, Color{191, 55, 66, 255});
+        const Vector2 tip{position_.x + std::cos(facingAngle_) * 11.0f,
+                          position_.y + std::sin(facingAngle_) * 11.0f};
+        DrawLineEx(position_, tip, 4.0f, Color{55, 19, 27, 255});
+    }
 
     if (state_ == State::Suspicious) {
         DrawText("?", static_cast<int>(position_.x) - 4, static_cast<int>(position_.y) - 34, 16, AlertColor());
@@ -221,6 +226,8 @@ void Guard::DrawDebug() const {
 }
 
 Vector2 Guard::Position() const { return position_; }
+
+void Guard::SetFacing(float degrees) { facingAngle_ = degrees * DEG2RAD; }
 
 bool Guard::IsAlive() const { return health_ > 0; }
 

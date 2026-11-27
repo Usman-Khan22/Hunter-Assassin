@@ -6,8 +6,16 @@
 #include <limits>
 #include <stdexcept>
 
-// Validate a temporary grid before replacing the current map and spawn.
 void TileMap::Load(const std::filesystem::path& path) {
+    LoadGrid(path, false);
+}
+
+void TileMap::LoadFacility(const std::filesystem::path& path) {
+    LoadGrid(path, true);
+}
+
+// Validate a temporary grid before replacing the current map and occupancy.
+void TileMap::LoadGrid(const std::filesystem::path& path, bool facility) {
     std::ifstream file(path);
     if (!file) {
         throw std::runtime_error("Unable to open map: " + path.string());
@@ -21,11 +29,20 @@ void TileMap::Load(const std::filesystem::path& path) {
         if (!line.empty() && line.back() == '\r') {
             line.pop_back();
         }
+        if (facility && (line.size() != 50 || tiles.size() >= 35)) {
+            throw std::runtime_error("Facility grid must have 35 rows of 50 tiles.");
+        }
         if (line.empty() || (!tiles.empty() && line.size() != tiles.front().size())) {
             throw std::runtime_error("Map must be a nonempty rectangle.");
         }
         for (std::size_t column = 0; column < line.size(); ++column) {
             char& tile = line[column];
+            if (facility) {
+                if (tile != 'W' && tile != '.' && tile != ',') {
+                    throw std::runtime_error("Facility tiles must be 'W', '.', or ','.");
+                }
+                continue;
+            }
             if (tile == 'S') {
                 ++spawnCount;
                 spawn = TileCenter({static_cast<int>(column), static_cast<int>(tiles.size())});
@@ -36,11 +53,22 @@ void TileMap::Load(const std::filesystem::path& path) {
         }
         tiles.push_back(line);
     }
-    if (!file.eof() || tiles.empty() || spawnCount != 1) {
+    if (facility && (!file.eof() || tiles.size() != 35)) {
+        throw std::runtime_error("Facility grid must have 35 rows of 50 tiles.");
+    }
+    if (!facility && (!file.eof() || tiles.empty() || spawnCount != 1)) {
         throw std::runtime_error("Map must be readable and contain exactly one spawn.");
     }
     tiles_.swap(tiles);
+    crates_.assign(Width() * Height(), 0);
     spawn_ = spawn;
+}
+
+void TileMap::AddCrate(TilePosition tile) {
+    if (IsWall(tile)) {
+        throw std::runtime_error("A cargo crate must occupy a free floor tile.");
+    }
+    crates_[tile.row * Width() + tile.column] = 1;
 }
 
 Vector2 TileMap::Spawn() const { return spawn_; }
@@ -49,7 +77,8 @@ int TileMap::Height() const { return static_cast<int>(tiles_.size()); }
 
 bool TileMap::IsWall(int column, int row) const {
     return column < 0 || row < 0 || column >= Width() || row >= Height() ||
-           tiles_[row][column] == '#';
+           tiles_[row][column] == '#' || tiles_[row][column] == 'W' ||
+           crates_[row * Width() + column] != 0;
 }
 
 // Restrict collision checks to tiles that overlap the circle's bounding box.
@@ -95,6 +124,17 @@ void TileMap::Draw() const {
 
 void TileMap::DrawGrid() const {
     constexpr Color grid{135, 187, 205, 95};
+    for (int row = 0; row < Height(); ++row) {
+        for (int column = 0; column < Width(); ++column) {
+            if (IsWall(column, row)) {
+                Color fill{255, 95, 75, 48};
+                if (crates_[row * Width() + column]) {
+                    fill = Color{255, 192, 75, 85};
+                }
+                DrawRectangle(column * TileSize, row * TileSize, TileSize, TileSize, fill);
+            }
+        }
+    }
     for (int column = 0; column <= Width(); ++column) {
         const int x = column * TileSize;
         DrawLine(x, 0, x, Height() * TileSize, grid);

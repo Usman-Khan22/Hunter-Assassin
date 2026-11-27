@@ -15,9 +15,10 @@ public:
 
     void Update(float deltaTime, Vector2 player, const TileMap& map, BfsPathfinder& pathfinder);
     void DrawVision(const TileMap& map) const;
-    void Draw() const;
+    void Draw(Texture2D texture = {}) const;
     void DrawDebug() const;
     Vector2 Position() const;
+    void SetFacing(float degrees);
     bool IsAlive() const;
     bool IsChasing() const;
     void TakeKnifeHit(Vector2 attacker);

@@ -6,9 +6,9 @@ class TileMap;
 
 class Player {
 public:
-    void Spawn(Vector2 position);
+    void Spawn(Vector2 position, float rotation = 90.0f);
     void Update(float deltaTime, const TileMap& map);
-    void Draw() const;
+    void Draw(Texture2D texture = {}) const;
     Vector2 Position() const;
     int Health() const;
     bool IsExposed() const;
@@ -20,7 +20,7 @@ public:
 private:
     static constexpr float Radius = 15.0f;
     static constexpr float Speed = 220.0f;
-    static constexpr float ExposedSpeedFactor = 0.8f;
+    static constexpr float ExposedSpeedFactor = 0.7f;
     static constexpr float ExposureDuration = 1.25f;
     static constexpr float ImmunityDuration = 0.8f;
     Vector2 position_{};
