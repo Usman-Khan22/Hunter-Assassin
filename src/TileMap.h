@@ -40,7 +40,7 @@ public:
     bool OpenDoor(int index, bool hasA, bool hasB);
     void ResetDoors();
     unsigned int WalkabilityRevision() const;
-    int NearbyDoor(Vector2 position, float range) const;
+    int NearbyDoor(Vector2 position, float range, float* distance = nullptr) const;
     Vector2 Spawn() const;
     int Width() const;
     int Height() const;

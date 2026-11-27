@@ -7,7 +7,7 @@ class TileMap;
 class Player {
 public:
     void Spawn(Vector2 position, float rotation = 90.0f);
-    void Update(float deltaTime, const TileMap& map);
+    void Update(float deltaTime, const TileMap& map, bool movementEnabled = true);
     void Draw(Texture2D texture = {}) const;
     Vector2 Position() const;
     int Health() const;

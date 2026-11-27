@@ -136,7 +136,7 @@ void TileMap::ResetDoors() {
 unsigned int TileMap::WalkabilityRevision() const { return walkabilityRevision_; }
 
 // Ignore only the candidate doorway in this interaction ray.
-int TileMap::NearbyDoor(Vector2 position, float range) const {
+int TileMap::NearbyDoor(Vector2 position, float range, float* nearestDistance) const {
     const TilePosition first = WorldTile({position.x - range, position.y - range});
     const TilePosition last = WorldTile({position.x + range, position.y + range});
     int nearest = -1;
@@ -159,6 +159,9 @@ int TileMap::NearbyDoor(Vector2 position, float range) const {
                 nearest = door;
             }
         }
+    }
+    if (nearestDistance != nullptr) {
+        *nearestDistance = best;
     }
     return nearest;
 }

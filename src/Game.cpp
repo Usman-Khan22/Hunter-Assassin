@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -10,7 +11,7 @@
 
 void Game::Run() {
     Initialize();
-    while (!WindowShouldClose()) {
+    while (!exitRequested_ && !WindowShouldClose()) {
         Update(GetFrameTime());
         Render();
     }
@@ -35,6 +36,7 @@ void Game::Initialize() {
         Shutdown();
         throw;
     }
+    SetExitKey(KEY_NULL);
     SetTargetFPS(60);
 }
 
@@ -90,6 +92,7 @@ void Game::LoadObjects(const std::filesystem::path& path) {
     map_.ConfigureDoors();
     int doorTiles = 0;
     int cards = 0;
+    int terminals = 0;
     std::vector<TilePosition> pathToObject;
     for (const FacilityObject& object : objects_) {
         if (object.type == SecurityDoor || object.type == ExitDoor) {
@@ -106,13 +109,19 @@ void Game::LoadObjects(const std::filesystem::path& path) {
             }
             ++cards;
         }
+        if (object.type == Terminal) {
+            if (TerminalAt(object.tile) == NoTerminal) {
+                throw std::runtime_error("Unexpected terminal location.");
+            }
+            ++terminals;
+        }
         if (object.type != Crate && !pathfinder_.FindPath(map_, spawn, object.tile, pathToObject)) {
             throw std::runtime_error("Unreachable facility object at (" + std::to_string(object.tile.column) +
                                      ", " + std::to_string(object.tile.row) + ").");
         }
     }
-    if (doorTiles != 10 || cards != 2) {
-        throw std::runtime_error("Facility needs ten door tiles and two access cards.");
+    if (doorTiles != 10 || cards != 2 || terminals != 3) {
+        throw std::runtime_error("Facility needs ten door tiles, two access cards, and three terminals.");
     }
 }
 
@@ -157,8 +166,23 @@ int Game::CardIndex(TilePosition tile) const {
     return -1;
 }
 
+Game::TerminalId Game::TerminalAt(TilePosition tile) const {
+    if (tile == TilePosition{28, 2}) {
+        return Servers;
+    }
+    if (tile == TilePosition{46, 2}) {
+        return Security;
+    }
+    if (tile == TilePosition{46, 19}) {
+        return Control;
+    }
+    return NoTerminal;
+}
+
 void Game::UpdateAccess(float deltaTime) {
-    accessMessageTime_ -= deltaTime;
+    if (accessMessageTime_ > 0.0f) {
+        accessMessageTime_ -= deltaTime;
+    }
     const Vector2 position = player_.Position();
     for (const FacilityObject& object : objects_) {
         if (object.type != Card) {
@@ -174,8 +198,44 @@ void Game::UpdateAccess(float deltaTime) {
         }
     }
 
-    nearbyDoor_ = map_.NearbyDoor(position, 68.0f);
-    if (nearbyDoor_ < 0 || !IsKeyPressed(KEY_E)) {
+    constexpr float range = 68.0f;
+    float nearestDistance = range;
+    nearbyDoor_ = map_.NearbyDoor(position, range, &nearestDistance);
+    nearbyTerminal_ = NoTerminal;
+    for (const FacilityObject& object : objects_) {
+        if (object.type != Terminal) {
+            continue;
+        }
+        const Vector2 center = TileMap::TileCenter(object.tile);
+        const float distance = std::hypot(center.x - position.x, center.y - position.y);
+        if (distance <= range && (distance < nearestDistance ||
+            (distance == nearestDistance && nearbyDoor_ < 0 && nearbyTerminal_ == NoTerminal)) &&
+            map_.HasClearLine(position, center)) {
+            nearestDistance = distance;
+            nearbyTerminal_ = TerminalAt(object.tile);
+            nearbyDoor_ = -1;
+        }
+    }
+    if (!IsKeyPressed(KEY_E)) {
+        return;
+    }
+    if (nearbyTerminal_ != NoTerminal) {
+        if (nearbyTerminal_ == Control && (!cards_[0] || !cards_[1])) {
+            accessMessage_ = "Access denied: both cards required";
+            accessMessageTime_ = 2.0f;
+            return;
+        }
+        activeTerminal_ = nearbyTerminal_;
+        if (activeTerminal_ == Servers) {
+            clues_[0] = true;
+        } else if (activeTerminal_ == Security) {
+            clues_[1] = true;
+        }
+        // Discard characters typed on the same frame as the interaction key.
+        while (GetCharPressed() != 0) {}
+        return;
+    }
+    if (nearbyDoor_ < 0) {
         return;
     }
     const FacilityDoor& door = map_.Door(nearbyDoor_);
@@ -183,7 +243,7 @@ void Game::UpdateAccess(float deltaTime) {
         accessMessage_ = "Access granted";
         nearbyDoor_ = -1;
     } else if (door.lockdown) {
-        accessMessage_ = "Final exit: lockdown active";
+        accessMessage_ = lockdownDisabled_ ? "Final exit remains sealed" : "Final exit: lockdown active";
     } else if (door.needsA && !cards_[0] && door.needsB && !cards_[1]) {
         accessMessage_ = "Access denied: cards A and B required";
     } else if (door.needsA && !cards_[0]) {
@@ -194,11 +254,54 @@ void Game::UpdateAccess(float deltaTime) {
     accessMessageTime_ = 2.0f;
 }
 
+void Game::CloseTerminal() {
+    activeTerminal_ = NoTerminal;
+    nearbyTerminal_ = NoTerminal;
+    passwordLength_ = 0;
+    password_[0] = '\0';
+    passwordDenied_ = false;
+}
+
+// Keep the code as text so the leading zero is preserved.
+void Game::UpdateTerminal() {
+    if (activeTerminal_ != Control || lockdownDisabled_) {
+        return;
+    }
+    if (IsKeyPressed(KEY_BACKSPACE) && passwordLength_ > 0) {
+        password_[--passwordLength_] = '\0';
+    }
+    int character = GetCharPressed();
+    while (character != 0) {
+        if (character >= '0' && character <= '9' && passwordLength_ < 4) {
+            password_[passwordLength_++] = static_cast<char>(character);
+            password_[passwordLength_] = '\0';
+            passwordDenied_ = false;
+        }
+        character = GetCharPressed();
+    }
+    if (!IsKeyPressed(KEY_ENTER) && !IsKeyPressed(KEY_KP_ENTER)) {
+        return;
+    }
+    if (std::strcmp(password_, "0742") == 0) {
+        lockdownDisabled_ = true;
+        accessMessage_ = "Override complete. Reach the exit.";
+        accessMessageTime_ = 3.0f;
+    } else {
+        passwordDenied_ = true;
+    }
+    passwordLength_ = 0;
+    password_[0] = '\0';
+}
+
 // Recreate round state while keeping the loaded map and open window.
 void Game::ResetRound() {
     map_.ResetDoors();
     cards_[0] = cards_[1] = false;
     nearbyDoor_ = -1;
+    nearbyTerminal_ = NoTerminal;
+    CloseTerminal();
+    clues_[0] = clues_[1] = false;
+    lockdownDisabled_ = false;
     accessMessage_ = "";
     accessMessageTime_ = 0.0f;
     // Three waypoints after each spawn, in the guard order from objects.txt.
@@ -230,6 +333,15 @@ void Game::ResetRound() {
 }
 
 void Game::Update(float deltaTime) {
+    const bool terminalWasOpen = activeTerminal_ != NoTerminal;
+    const bool escape = IsKeyPressed(KEY_ESCAPE);
+    if (escape && !terminalWasOpen) {
+        exitRequested_ = true;
+        return;
+    }
+    if (escape) {
+        CloseTerminal();
+    }
     if (IsKeyPressed(KEY_F3)) {
         debugVisible_ = !debugVisible_;
     }
@@ -240,8 +352,15 @@ void Game::Update(float deltaTime) {
         return;
     }
 
-    player_.Update(deltaTime, map_);
-    UpdateAccess(deltaTime);
+    if (terminalWasOpen && accessMessageTime_ > 0.0f) {
+        accessMessageTime_ -= deltaTime;
+    }
+    player_.Update(deltaTime, map_, !terminalWasOpen);
+    if (!terminalWasOpen) {
+        UpdateAccess(deltaTime);
+    } else if (!escape) {
+        UpdateTerminal();
+    }
     if (knifeCooldown_ > 0.0f) {
         knifeCooldown_ -= deltaTime;
     }
@@ -249,7 +368,8 @@ void Game::Update(float deltaTime) {
         knifeEffect_ -= deltaTime;
     }
     // Resolve the knife first so a guard killed this frame cannot retaliate.
-    if (IsKeyPressed(KEY_SPACE) && knifeCooldown_ <= 0.0f) {
+    if (!terminalWasOpen && activeTerminal_ == NoTerminal &&
+        IsKeyPressed(KEY_SPACE) && knifeCooldown_ <= 0.0f) {
         AttackWithKnife();
     }
 
@@ -260,7 +380,11 @@ void Game::Update(float deltaTime) {
             detected = true;
         }
         if (guard.TryAttack(player_.Position(), map_)) {
+            const int previousHealth = player_.Health();
             player_.TakeDamage();
+            if (player_.Health() < previousHealth && activeTerminal_ != NoTerminal) {
+                CloseTerminal();
+            }
             if (player_.Health() == 0) {
                 return;
             }
@@ -346,8 +470,8 @@ void Game::Render() const {
     EndMode2D();
 
     constexpr Color panel{13, 19, 25, 235};
-    constexpr int hudY = ScreenHeight - 116;
-    DrawRectangle(16, hudY, 278, 100, panel);
+    constexpr int hudY = ScreenHeight - 160;
+    DrawRectangle(16, hudY, 278, 144, panel);
     DrawText(TextFormat("HEALTH  %d / %d", player_.Health(), Player::MaxHealth),
              28, hudY + 11, 18, RAYWHITE);
     for (int point = 0; point < Player::MaxHealth; ++point) {
@@ -360,12 +484,25 @@ void Game::Render() const {
     DrawText("Objective: Find an escape", 28, hudY + 42, 18, RAYWHITE);
     const int cardCount = static_cast<int>(cards_[0]) + static_cast<int>(cards_[1]);
     DrawText(TextFormat("ACCESS CARDS: %d/2", cardCount), 28, hudY + 68, 18, RAYWHITE);
+    const int clueCount = static_cast<int>(clues_[0]) + static_cast<int>(clues_[1]);
+    DrawText(TextFormat("CLUES: %d/2", clueCount), 28, hudY + 90, 18, RAYWHITE);
+    if (lockdownDisabled_) {
+        DrawText("LOCKDOWN DISABLED", 28, hudY + 112, 18, Color{92, 222, 150, 255});
+    } else {
+        DrawText("LOCKDOWN ACTIVE", 28, hudY + 112, 18, Color{232, 201, 115, 255});
+    }
     if (player_.Health() > 0) {
-        if (nearbyDoor_ >= 0) {
+        if (activeTerminal_ == NoTerminal && nearbyTerminal_ != NoTerminal) {
+            DrawText("E  Use terminal", 320, ScreenHeight - 40, 18, RAYWHITE);
+        } else if (activeTerminal_ == NoTerminal && nearbyDoor_ >= 0) {
             DrawText("E  Interact with door", 320, ScreenHeight - 40, 18, RAYWHITE);
         }
         if (accessMessageTime_ > 0.0f) {
-            DrawText(accessMessage_, 320, ScreenHeight - 68, 18, RAYWHITE);
+            Color messageColor = RAYWHITE;
+            if (std::strncmp(accessMessage_, "Access denied", 13) == 0) {
+                messageColor = Color{252, 115, 120, 255};
+            }
+            DrawText(accessMessage_, 320, ScreenHeight - 68, 18, messageColor);
         }
     }
     if (player_.IsExposed() && player_.Health() > 0) {
@@ -383,6 +520,9 @@ void Game::Render() const {
         DrawText(TextFormat("Tile: %d, %d", tile.column, tile.row), x + 12, 80, 18, RAYWHITE);
     }
 
+    if (activeTerminal_ != NoTerminal) {
+        DrawTerminal();
+    }
     if (player_.Health() == 0) {
         DrawRectangle(0, 0, ScreenWidth, ScreenHeight, Color{13, 19, 25, 225});
         DrawText("DEFEAT", (ScreenWidth - MeasureText("DEFEAT", 48)) / 2,
@@ -391,6 +531,47 @@ void Game::Render() const {
                  ScreenHeight / 2 + 12, 22, RAYWHITE);
     }
     EndDrawing();
+}
+
+void Game::DrawTerminal() const {
+    constexpr int x = 260;
+    constexpr int y = 195;
+    constexpr Color teal{82, 225, 207, 255};
+    constexpr Color yellow{245, 211, 119, 255};
+    DrawRectangle(x, y, 760, 300, Color{20, 29, 43, 250});
+    DrawRectangle(x, y, 760, 3, teal);
+
+    if (activeTerminal_ == Servers) {
+        DrawText("RECOVERED SECURITY LOG", x + 32, y + 30, 28, teal);
+        DrawText("The first two digits of the override code correspond", x + 32, y + 92, 20, RAYWHITE);
+        DrawText("to the station identification number.", x + 32, y + 120, 20, RAYWHITE);
+        DrawText("NEXUS-7", x + 32, y + 178, 24, yellow);
+        DrawText("Station ID: 07", x + 32, y + 212, 20, yellow);
+    } else if (activeTerminal_ == Security) {
+        DrawText("CLASSIFIED EXPERIMENT RECORD", x + 32, y + 30, 28, teal);
+        DrawText("The final two digits of the override code correspond", x + 32, y + 92, 20, RAYWHITE);
+        DrawText("to the classified experiment number.", x + 32, y + 120, 20, RAYWHITE);
+        DrawText("EXPERIMENT 42", x + 32, y + 184, 24, yellow);
+    } else {
+        DrawText("CONTROL TERMINAL", x + 32, y + 30, 28, teal);
+        if (lockdownDisabled_) {
+            DrawText("PROTOCOL ZERO OVERRIDDEN", x + 32, y + 110, 30, Color{92, 222, 150, 255});
+            DrawText("Reach the exit.", x + 32, y + 165, 20, RAYWHITE);
+        } else {
+            DrawText("Enter the four-digit lockdown override.", x + 32, y + 90, 20, yellow);
+            char display[5] = "____";
+            for (int i = 0; i < passwordLength_; ++i) {
+                display[i] = password_[i];
+            }
+            DrawText(display, x + 32, y + 128, 36, RAYWHITE);
+            if (passwordDenied_) {
+                DrawText("ACCESS DENIED", x + 32, y + 180, 20, Color{252, 115, 120, 255});
+            }
+            DrawText("0-9  Enter digits    BACKSPACE  Delete    ENTER  Submit",
+                     x + 32, y + 222, 18, RAYWHITE);
+        }
+    }
+    DrawText("ESC  Close terminal", x + 32, y + 266, 18, teal);
 }
 
 void Game::Shutdown() {

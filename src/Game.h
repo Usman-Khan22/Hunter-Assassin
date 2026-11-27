@@ -11,6 +11,7 @@ public:
 
 private:
     enum ObjectType { Assassin, GuardSpawn, Crate, SecurityDoor, ExitDoor, Terminal, Card, ObjectTypeCount };
+    enum TerminalId { NoTerminal, Servers, Security, Control };
     struct FacilityObject {
         ObjectType type;
         TilePosition tile;
@@ -22,7 +23,11 @@ private:
     void LoadArtwork(const std::filesystem::path& directory);
     void DrawFacility() const;
     int CardIndex(TilePosition tile) const;
+    TerminalId TerminalAt(TilePosition tile) const;
     void UpdateAccess(float deltaTime);
+    void UpdateTerminal();
+    void CloseTerminal();
+    void DrawTerminal() const;
     void ResetRound();
     void Update(float deltaTime);
     void AttackWithKnife();
@@ -56,4 +61,12 @@ private:
     int nearbyDoor_ = -1;
     const char* accessMessage_ = "";
     float accessMessageTime_ = 0.0f;
+    TerminalId nearbyTerminal_ = NoTerminal;
+    TerminalId activeTerminal_ = NoTerminal;
+    bool clues_[2]{};
+    bool lockdownDisabled_ = false;
+    char password_[5]{};
+    int passwordLength_ = 0;
+    bool passwordDenied_ = false;
+    bool exitRequested_ = false;
 };

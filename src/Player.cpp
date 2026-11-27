@@ -14,9 +14,12 @@ void Player::Spawn(Vector2 position, float rotation) {
 }
 
 // Normalize input before scaling by time, then resolve each axis to allow wall sliding.
-void Player::Update(float deltaTime, const TileMap& map) {
+void Player::Update(float deltaTime, const TileMap& map, bool movementEnabled) {
     if (immunity_ > 0.0f) {
         immunity_ -= deltaTime;
+    }
+    if (!movementEnabled) {
+        return;
     }
     const Vector2 input{
         static_cast<float>(IsKeyDown(KEY_D) - IsKeyDown(KEY_A)),
