@@ -64,6 +64,9 @@ private:
     void UpdateProjectiles(float deltaTime);
     void AddLaserEffect(Vector2 position, float angle, bool flash);
     void DrawLaserCombat() const;
+    void CollectAbilityPickups();
+    void DrawAbilityPickup(AbilityType type, Vector2 center, float size) const;
+    void DrawAbilityHud() const;
     void ClearLaserCombat();
     void Render() const;
     void Shutdown();
@@ -89,6 +92,7 @@ private:
     static constexpr int MinimapTilePixels = 5;
     static constexpr int MinimapMargin = 16;
     static constexpr int MinimapPadding = 6;
+    static constexpr TilePosition AbilityTiles[AbilityCount]{{8, 18}, {22, 30}};
     static constexpr const char* ObjectNames[ObjectTypeCount]{
         "assassin", "guard", "cargo_crate", "security_door", "exit_door", "security_terminal", "access_card"
     };
@@ -134,4 +138,5 @@ private:
     TilePosition alarmLocation_{};
     const char* alarmNotice_ = "";
     double alarmNoticeUntil_ = 0.0;
+    bool abilityPickupCollected_[AbilityCount]{};
 };

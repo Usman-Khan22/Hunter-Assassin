@@ -123,6 +123,16 @@ void Game::LoadObjects(const std::filesystem::path& path) {
     if (doorTiles != 10 || cards != 2 || terminals != 3) {
         throw std::runtime_error("Facility needs ten door tiles, two access cards, and three terminals.");
     }
+    for (const TilePosition tile : AbilityTiles) {
+        for (const FacilityObject& object : objects_) {
+            if (object.tile == tile) {
+                throw std::runtime_error("Ability pickup overlaps a facility object.");
+            }
+        }
+        if (!pathfinder_.FindPath(map_, spawn, tile, pathToObject)) {
+            throw std::runtime_error("Ability pickup must be reachable from spawn.");
+        }
+    }
 }
 
 void Game::LoadArtwork(const std::filesystem::path& directory) {
@@ -352,6 +362,9 @@ void Game::UpdateTerminal() {
 // Recreate round state while keeping the loaded map and open window.
 void Game::ResetRound() {
     ClearLaserCombat();
+    for (bool& collected : abilityPickupCollected_) {
+        collected = false;
+    }
     events_.Clear();
     alarmActive_ = false;
     nextAlarmTime_ = 0.0;
@@ -458,8 +471,18 @@ void Game::Update(float deltaTime) {
     if (terminalWasOpen && accessMessageTime_ > 0.0f) {
         accessMessageTime_ -= deltaTime;
     }
+    player_.TickAbilities(deltaTime);
+    if (!terminalWasOpen) {
+        if (IsKeyPressed(KEY_Q)) {
+            player_.ActivateAbility(Cloak);
+        }
+        if (IsKeyPressed(KEY_LEFT_SHIFT)) {
+            player_.ActivateAbility(Boost);
+        }
+    }
     player_.Update(deltaTime, map_, !terminalWasOpen);
     if (!terminalWasOpen) {
+        CollectAbilityPickups();
         UpdateAccess(deltaTime);
     } else if (!escape) {
         UpdateTerminal();
@@ -479,16 +502,19 @@ void Game::Update(float deltaTime) {
     }
     bool detected = false;
     bool newlyDetected = false;
+    const Vector2 playerPosition = player_.Position();
+    const bool visibleTarget = !player_.IsInvisible();
     for (Guard& guard : guards_) {
         const bool wasChasing = guard.IsChasing();
-        guard.Update(deltaTime, player_.Position(), map_, pathfinder_);
+        // A cloaked player is no target. Guards keep their existing investigation tile.
+        guard.UpdateWithTarget(deltaTime, visibleTarget ? &playerPosition : nullptr, map_, pathfinder_);
         if (guard.IsChasing()) {
             detected = true;
             if (!wasChasing) {
                 newlyDetected = true;
             }
         }
-        if (guard.TryAttack(player_.Position(), map_)) {
+        if (visibleTarget && guard.TryAttack(playerPosition, map_)) {
             DamagePlayer(1);
             if (missionState_ != Active) {
                 return;
@@ -733,6 +759,7 @@ void Game::DrawLaserCombat() const {
 
 // Scan once for the nearest guard the knife can actually reach.
 void Game::AttackWithKnife() {
+    player_.BreakCloak();
     knifeCooldown_ = KnifeCooldown;
     const Vector2 origin = player_.Position();
     Vector2 direction = player_.Facing();
@@ -783,6 +810,11 @@ void Game::Render() const {
 
     BeginMode2D(camera_);
     DrawFacility();
+    for (int index = 0; index < AbilityCount; ++index) {
+        if (!abilityPickupCollected_[index]) {
+            DrawAbilityPickup(static_cast<AbilityType>(index), TileMap::TileCenter(AbilityTiles[index]), 10.0f);
+        }
+    }
     for (const Guard& guard : guards_) {
         guard.DrawVision(map_);
     }
@@ -818,6 +850,9 @@ void Game::Render() const {
     DrawTimer();
     if (missionState_ == Active) {
         DrawAlarm();
+        if (activeTerminal_ == NoTerminal) {
+            DrawAbilityHud();
+        }
     }
     const bool showMinimap = minimapVisible_ && missionState_ == Active && activeTerminal_ == NoTerminal;
     if (showMinimap) {
@@ -961,6 +996,13 @@ void Game::DrawMinimap() const {
         const Vector2 center = TileMap::TileCenter(object.tile);
         DrawCircleV({x + center.x * pixelsPerUnit, y + center.y * pixelsPerUnit}, 2.0f, color);
     }
+    for (int index = 0; index < AbilityCount; ++index) {
+        if (!abilityPickupCollected_[index]) {
+            const Vector2 center = TileMap::TileCenter(AbilityTiles[index]);
+            DrawAbilityPickup(static_cast<AbilityType>(index),
+                              {x + center.x * pixelsPerUnit, y + center.y * pixelsPerUnit}, 2.5f);
+        }
+    }
     if (debugVisible_) {
         for (const Guard& guard : guards_) {
             if (guard.IsAlive()) {
@@ -982,6 +1024,62 @@ void Game::DrawMinimap() const {
 int Game::SecondsRemaining() const {
     // Show 00:01 while any fraction of the last second remains.
     return static_cast<int>(std::ceil(timeRemaining_));
+}
+
+void Game::CollectAbilityPickups() {
+    const Vector2 position = player_.Position();
+    for (int index = 0; index < AbilityCount; ++index) {
+        if (abilityPickupCollected_[index]) {
+            continue;
+        }
+        const Vector2 center = TileMap::TileCenter(AbilityTiles[index]);
+        if (std::hypot(center.x - position.x, center.y - position.y) <= 24.0f &&
+            map_.HasClearLine(position, center) &&
+            player_.AddAbilityCharge(static_cast<AbilityType>(index))) {
+            abilityPickupCollected_[index] = true;
+        }
+    }
+}
+
+void Game::DrawAbilityPickup(AbilityType type, Vector2 center, float size) const {
+    if (type == Cloak) {
+        constexpr Color teal{83, 249, 176, 255};
+        DrawTriangle({center.x, center.y - size}, {center.x - size, center.y},
+                     {center.x, center.y + size}, teal);
+        DrawTriangle({center.x, center.y - size}, {center.x, center.y + size},
+                     {center.x + size, center.y}, teal);
+    } else {
+        constexpr Color yellow{255, 237, 100, 255};
+        DrawTriangle({center.x + size * 0.3f, center.y - size},
+                     {center.x - size * 0.8f, center.y + size * 0.2f},
+                     {center.x + size * 0.6f, center.y + size * 0.2f}, yellow);
+        DrawTriangle({center.x - size * 0.6f, center.y - size * 0.1f},
+                     {center.x - size * 0.3f, center.y + size},
+                     {center.x + size * 0.8f, center.y - size * 0.1f}, yellow);
+    }
+}
+
+void Game::DrawAbilityHud() const {
+    const char* names[]{"Q  Invisibility", "L-SHIFT  Speed Boost"};
+    const Color accents[]{Color{83, 249, 176, 255}, Color{255, 237, 100, 255}};
+    constexpr int y = ScreenHeight - 80;
+    for (int index = 0; index < AbilityCount; ++index) {
+        const int x = ScreenWidth - 428 + 210 * index;
+        const PlayerAbility& ability = player_.Ability(static_cast<AbilityType>(index));
+        DrawRectangle(x, y, 202, 64, Color{13, 19, 25, 235});
+        DrawText(names[index], x + 10, y + 8, 17, accents[index]);
+        if (ability.Active()) {
+            DrawText(TextFormat("%d/%d charges  |  %.1fs", ability.charges,
+                                Player::MaxAbilityCharges, ability.remaining), x + 10, y + 30, 15, RAYWHITE);
+            DrawRectangle(x + 10, y + 51, 182, 4, Color{58, 70, 82, 255});
+            DrawRectangle(x + 10, y + 51, static_cast<int>(182 * ability.remaining / ability.duration),
+                          4, accents[index]);
+        } else {
+            const char* status = ability.charges > 0 ? "Ready" : "Depleted";
+            DrawText(TextFormat("%d/%d charges  |  %s", ability.charges, Player::MaxAbilityCharges, status),
+                     x + 10, y + 30, 15, RAYWHITE);
+        }
+    }
 }
 
 void Game::DrawTimer() const {

@@ -13,6 +13,10 @@ void Player::Spawn(Vector2 position, float rotation) {
     exposure_ = 0.0f;
     animation_.Start(CharacterPose::Idle);
     knifeDirection_ = facing_;
+    for (PlayerAbility& ability : abilities_) {
+        ability.charges = 1;
+        ability.remaining = 0.0f;
+    }
 }
 
 // Normalize input before scaling by time, then resolve each axis to allow wall sliding.
@@ -40,6 +44,9 @@ void Player::Update(float deltaTime, const TileMap& map, bool movementEnabled) {
     if (IsExposed()) {
         distance *= ExposedSpeedFactor;
     }
+    if (abilities_[Boost].Active()) {
+        distance *= BoostSpeedFactor;
+    }
     // Small substeps prevent tunneling and keep corner contact stable.
     const int steps = static_cast<int>(std::ceil(distance / (Radius * 0.25f)));
     const float stride = distance / steps;
@@ -58,6 +65,11 @@ void Player::Update(float deltaTime, const TileMap& map, bool movementEnabled) {
 }
 
 void Player::Draw(Texture2D texture, const CharacterFrames* frames) const {
+    const bool alive = health_ > 0;
+    if (alive && abilities_[Boost].Active()) {
+        DrawCircleLines(static_cast<int>(position_.x), static_cast<int>(position_.y),
+                        22.0f, Color{255, 216, 95, 100});
+    }
     if (frames != nullptr) {
         texture = animation_.Texture(*frames, texture);
     }
@@ -66,6 +78,9 @@ void Player::Draw(Texture2D texture, const CharacterFrames* frames) const {
         if (immunity_ > 0.0f) {
             tint = Color{255, 155, 155, 255};
         }
+        if (IsInvisible()) {
+            tint.a = 102;
+        }
         Vector2 direction = facing_;
         if (animation_.pose == CharacterPose::Attack) {
             direction = knifeDirection_;
@@ -73,14 +88,16 @@ void Player::Draw(Texture2D texture, const CharacterFrames* frames) const {
         DrawCenteredSprite(texture, position_, std::atan2(direction.y, direction.x) * RAD2DEG, tint);
         return;
     }
-    DrawCircleV(position_, Radius + 2.0f, Color{11, 20, 25, 255});
+    const unsigned char alpha = IsInvisible() ? 102 : 255;
+    DrawCircleV(position_, Radius + 2.0f, Color{11, 20, 25, alpha});
     Color body{67, 223, 189, 255};
     if (immunity_ > 0.0f) {
         body = RAYWHITE;
     }
+    body.a = alpha;
     DrawCircleV(position_, Radius, body);
     const Vector2 tip{position_.x + facing_.x * 11.0f, position_.y + facing_.y * 11.0f};
-    DrawLineEx(position_, tip, 4.0f, Color{17, 55, 52, 255});
+    DrawLineEx(position_, tip, 4.0f, Color{17, 55, 52, alpha});
 }
 
 Vector2 Player::Position() const { return position_; }
@@ -123,3 +140,39 @@ void Player::AdvanceAnimation(float deltaTime) { animation_.Advance(deltaTime, 0
 const CharacterAnimation& Player::Animation() const { return animation_; }
 
 Vector2 Player::KnifeDirection() const { return knifeDirection_; }
+
+const PlayerAbility& Player::Ability(AbilityType type) const { return abilities_[type]; }
+
+bool Player::ActivateAbility(AbilityType type) {
+    PlayerAbility& ability = abilities_[type];
+    if (health_ <= 0 || ability.Active() || ability.charges == 0) {
+        return false;
+    }
+    --ability.charges;
+    ability.remaining = ability.duration;
+    return true;
+}
+
+bool Player::AddAbilityCharge(AbilityType type) {
+    PlayerAbility& ability = abilities_[type];
+    if (ability.charges >= MaxAbilityCharges) {
+        return false;
+    }
+    ++ability.charges;
+    return true;
+}
+
+void Player::TickAbilities(float deltaTime) {
+    for (PlayerAbility& ability : abilities_) {
+        if (ability.Active()) {
+            ability.remaining -= deltaTime;
+            if (ability.remaining < 0.0f) {
+                ability.remaining = 0.0f;
+            }
+        }
+    }
+}
+
+bool Player::IsInvisible() const { return health_ > 0 && abilities_[Cloak].Active(); }
+
+void Player::BreakCloak() { abilities_[Cloak].remaining = 0.0f; }

@@ -51,6 +51,10 @@ bool Guard::CanSee(Vector2 player, const TileMap& map) const {
 
 // Process this frame's visibility before taking the resulting state's action.
 void Guard::Update(float deltaTime, Vector2 player, const TileMap& map, BfsPathfinder& pathfinder) {
+    UpdateWithTarget(deltaTime, &player, map, pathfinder);
+}
+
+void Guard::UpdateWithTarget(float deltaTime, const Vector2* player, const TileMap& map, BfsPathfinder& pathfinder) {
     animation_.Advance(deltaTime, 0.11f);
     if (!IsAlive()) {
         return;
@@ -62,9 +66,9 @@ void Guard::Update(float deltaTime, Vector2 player, const TileMap& map, BfsPathf
     if (attackEffect_ > 0.0f) {
         attackEffect_ -= deltaTime;
     }
-    const bool visible = CanSee(player, map);
+    const bool visible = player != nullptr && CanSee(*player, map);
     if (visible) {
-        lastKnown_ = TileMap::WorldTile(player);
+        lastKnown_ = TileMap::WorldTile(*player);
         if (state_ == State::Patrol || state_ == State::Suspicious) {
             suspicion_ += deltaTime;
             state_ = suspicion_ >= SuspicionDuration ? State::Chase : State::Suspicious;
@@ -84,7 +88,9 @@ void Guard::Update(float deltaTime, Vector2 player, const TileMap& map, BfsPathf
 
     float movementFactor = 1.0f;
     if (type_ == LASER) {
-        if (UpdateLaserAttack(deltaTime, player, map)) {
+        if (!visible) {
+            CancelLaserCharge();
+        } else if (UpdateLaserAttack(deltaTime, *player, map)) {
             return;
         }
         movementFactor = LaserMovementFactor;

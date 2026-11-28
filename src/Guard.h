@@ -17,6 +17,7 @@ public:
           std::initializer_list<TilePosition> patrol, GuardType type = MELEE);
 
     void Update(float deltaTime, Vector2 player, const TileMap& map, BfsPathfinder& pathfinder);
+    void UpdateWithTarget(float deltaTime, const Vector2* player, const TileMap& map, BfsPathfinder& pathfinder);
     void DrawVision(const TileMap& map) const;
     void Draw(Texture2D texture = {}, const CharacterFrames* frames = nullptr) const;
     void DrawDebug() const;
