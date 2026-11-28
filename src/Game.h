@@ -2,6 +2,7 @@
 
 #include "BfsPathfinder.h"
 #include "EventHeap.h"
+#include "Environment.h"
 #include "Guard.h"
 #include "Player.h"
 #include "TileMap.h"
@@ -37,6 +38,10 @@ private:
 
     void Initialize();
     void LoadObjects(const std::filesystem::path& path);
+    void LoadEnvironment(const std::filesystem::path& path);
+    bool IsReservedForSolidProp(TilePosition tile) const;
+    void ValidateDecoratedFacility();
+    void DrawEnvironment() const;
     void LoadArtwork(const std::filesystem::path& directory);
     void LoadAnimationArtwork(const std::filesystem::path& directory);
     void DrawFacility() const;
@@ -78,6 +83,20 @@ private:
     static constexpr float KnifeRange = 52.0f;
     static constexpr float KnifeCooldown = 0.45f;
     static constexpr int GuardCount = 7;
+    static constexpr TilePosition GuardWaypoints[GuardCount][3]{
+        {{20, 10}, {20, 11}, {25, 11}},
+        {{12, 23}, {12, 24}, {6, 24}},
+        {{33, 21}, {34, 21}, {34, 13}},
+        {{24, 17}, {24, 14}, {17, 14}},
+        {{39, 5}, {39, 2}, {44, 2}},
+        {{37, 26}, {38, 26}, {38, 32}},
+        {{7, 30}, {7, 32}, {5, 32}}
+    };
+    static constexpr TilePosition ReinforcementPatrols[][2]{
+        {{47, 3}, {47, 4}},
+        {{2, 24}, {3, 24}},
+        {{32, 11}, {31, 11}}
+    };
     static constexpr int MaxReinforcements = 3;
     static constexpr double ReinforcementDelay = 8.0;
     static constexpr double AlarmDuration = 15.0;
@@ -101,6 +120,8 @@ private:
     BfsPathfinder pathfinder_;
     std::vector<Guard> guards_;
     std::vector<FacilityObject> objects_;
+    std::vector<EnvironmentPlacement> environment_;
+    Texture2D environmentTextures_[EnvironmentAssetCount]{};
     Texture2D facilityTexture_{};
     Texture2D sprites_[ObjectTypeCount]{};
     enum LaserTexture { LaserGuardIdle, LaserProjectile, LaserCharge, LaserImpact, MuzzleFlash, KnifeSlash, LaserTextureCount };

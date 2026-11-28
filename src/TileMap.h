@@ -34,6 +34,7 @@ public:
     void Load(const std::filesystem::path& path);
     void LoadFacility(const std::filesystem::path& path);
     void AddCrate(TilePosition tile);
+    void AddSolidProp(TilePosition tile);
     void ConfigureDoors();
     int DoorAt(TilePosition tile) const;
     const FacilityDoor& Door(int index) const;
@@ -46,6 +47,8 @@ public:
     int Height() const;
     bool IsWall(int column, int row) const;
     bool HasCrate(int column, int row) const;
+    bool HasSolidProp(int column, int row) const;
+    bool IsPermanentWall(TilePosition tile) const;
     bool IsWall(TilePosition tile) const { return IsWall(tile.column, tile.row); }
     bool CircleHitsWall(Vector2 center, float radius) const;
     bool HasClearLine(Vector2 from, Vector2 to) const;
@@ -69,6 +72,7 @@ private:
     DoorHash doorIndex_;
     unsigned int walkabilityRevision_ = 0;
     std::vector<std::string> tiles_;
-    std::vector<unsigned char> crates_;
+    enum Occupant { EmptyCell, CrateCell, PropCell };
+    std::vector<unsigned char> occupancy_;
     Vector2 spawn_{};
 };

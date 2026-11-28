@@ -93,8 +93,8 @@ floor_vent 18 30 0
 floor_vent 25 30 0
 wall_pipe 18 26 0
 power_generator 31 32 0
-power_generator 38 32 0
-power_generator 38 26 0
+power_generator 36 32 0
+power_generator 38 27 0
 hazard_marking 34 27 0
 hazard_marking 35 27 0
 hazard_marking 36 27 0

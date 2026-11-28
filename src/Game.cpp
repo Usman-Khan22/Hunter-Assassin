@@ -22,6 +22,8 @@ void Game::Initialize() {
     const auto assets = std::filesystem::u8path(GetApplicationDirectory()) / "assets";
     map_.LoadFacility(assets / "maps" / "facility.txt");
     LoadObjects(assets / "maps" / "objects.txt");
+    LoadEnvironment(assets / "environment_expansion" / "maps" / "decoration_objects.txt");
+    ValidateDecoratedFacility();
     camera_.offset = {ScreenWidth / 2.0f, ScreenHeight / 2.0f};
     camera_.zoom = CameraZoom;
     ResetRound();
@@ -38,6 +40,121 @@ void Game::Initialize() {
     }
     SetExitKey(KEY_NULL);
     SetTargetFPS(60);
+}
+
+bool Game::IsReservedForSolidProp(TilePosition tile) const {
+    for (const TilePosition pickup : AbilityTiles) {
+        if (pickup == tile) return true;
+    }
+    for (const auto& route : GuardWaypoints) {
+        for (const TilePosition waypoint : route) {
+            if (waypoint == tile) return true;
+        }
+    }
+    for (const auto& route : ReinforcementPatrols) {
+        for (const TilePosition waypoint : route) {
+            if (waypoint == tile) return true;
+        }
+    }
+    return false;
+}
+
+void Game::LoadEnvironment(const std::filesystem::path& path) {
+    std::ifstream file(path);
+    if (!file) {
+        throw std::runtime_error("Unable to open decorations: " + path.string());
+    }
+    const TilePosition mountWalls[]{{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
+    std::string line;
+    int lineNumber = 0;
+    while (std::getline(file, line)) {
+        ++lineNumber;
+        std::istringstream fields(line);
+        std::string name, extra;
+        if (!(fields >> name) || name.front() == '#') {
+            continue;
+        }
+        const std::string location = " on decoration_objects.txt line " + std::to_string(lineNumber);
+        EnvironmentPlacement placement{};
+        while (placement.type < EnvironmentAssetCount && name != EnvironmentAssets[placement.type].name) {
+            ++placement.type;
+        }
+        if (placement.type == EnvironmentAssetCount ||
+            !(fields >> placement.tile.column >> placement.tile.row >> placement.rotation) ||
+            (fields >> extra)) {
+            throw std::runtime_error("Invalid decoration type or fields" + location);
+        }
+        const EnvironmentAsset& asset = EnvironmentAssets[placement.type];
+        if (placement.rotation < 0 || placement.rotation > asset.maxRotation || placement.rotation % 90 != 0) {
+            throw std::runtime_error("Invalid decoration rotation" + location);
+        }
+        const int width = placement.Width();
+        const int height = placement.Height();
+        if (placement.tile.column < 0 || placement.tile.row < 0 ||
+            placement.tile.column > map_.Width() - width || placement.tile.row > map_.Height() - height) {
+            throw std::runtime_error("Decoration footprint outside facility" + location);
+        }
+        const TilePosition wall = mountWalls[placement.rotation / 90];
+        for (int y = placement.tile.row; y < placement.tile.row + height; ++y) {
+            for (int x = placement.tile.column; x < placement.tile.column + width; ++x) {
+                const TilePosition tile{x, y};
+                if (map_.IsWall(tile) || (asset.layer == SolidProp && IsReservedForSolidProp(tile))) {
+                    throw std::runtime_error("Decoration overlaps blocked or reserved tile" + location);
+                }
+                for (const FacilityObject& object : objects_) {
+                    if (object.tile == tile) {
+                        throw std::runtime_error("Decoration overlaps a gameplay object" + location);
+                    }
+                }
+                if (asset.layer == WallMounted && !map_.IsPermanentWall({x + wall.column, y + wall.row})) {
+                    throw std::runtime_error("Wall decoration has no wall behind its footprint" + location);
+                }
+                if (asset.layer == SolidProp) {
+                    for (const EnvironmentPlacement& earlier : environment_) {
+                        if (x >= earlier.tile.column && x < earlier.tile.column + earlier.Width() &&
+                            y >= earlier.tile.row && y < earlier.tile.row + earlier.Height()) {
+                            throw std::runtime_error("Solid prop overlaps an earlier decoration" + location);
+                        }
+                    }
+                }
+            }
+        }
+        if (asset.layer == SolidProp) {
+            for (int y = 0; y < height; ++y) {
+                for (int x = 0; x < width; ++x) {
+                    map_.AddSolidProp({placement.tile.column + x, placement.tile.row + y});
+                }
+            }
+        }
+        environment_.push_back(placement);
+    }
+    if (!file.eof() || environment_.empty()) {
+        throw std::runtime_error("Decoration file is empty or unreadable.");
+    }
+}
+
+void Game::ValidateDecoratedFacility() {
+    TilePosition spawn{};
+    for (const FacilityObject& object : objects_) {
+        if (object.type == Assassin) {
+            spawn = object.tile;
+        }
+    }
+    std::vector<TilePosition> path;
+    for (const FacilityObject& object : objects_) {
+        if (object.type != Crate && object.type != SecurityDoor && object.type != ExitDoor &&
+            !pathfinder_.FindPath(map_, spawn, object.tile, path)) {
+            throw std::runtime_error("Decorations obstruct a facility objective or guard spawn.");
+        }
+    }
+    for (int row = 0; row < map_.Height(); ++row) {
+        for (int column = 0; column < map_.Width(); ++column) {
+            const TilePosition tile{column, row};
+            if (IsReservedForSolidProp(tile) && !pathfinder_.FindPath(map_, spawn, tile, path)) {
+                throw std::runtime_error("Decorations obstruct an ability pickup or patrol waypoint.");
+            }
+        }
+    }
 }
 
 // Apply crate occupancy before checking that every placement is accessible.
@@ -149,6 +266,15 @@ void Game::LoadArtwork(const std::filesystem::path& directory) {
         }
     }
     const auto laserDirectory = directory.parent_path() / "environment_expansion" / "png";
+    for (int index = 0; index < EnvironmentAssetCount; ++index) {
+        const EnvironmentAsset& asset = EnvironmentAssets[index];
+        const auto path = laserDirectory / (std::string(asset.name) + ".png");
+        Texture2D& texture = environmentTextures_[index];
+        texture = LoadTexture(path.string().c_str());
+        if (texture.id == 0 || texture.width != asset.pixelWidth || texture.height != asset.pixelHeight) {
+            throw std::runtime_error("Missing or invalid environmental texture: " + path.string());
+        }
+    }
     const char* paths[LaserTextureCount]{
         "laser_guard.png", "effects/laser_projectile.png", "effects/laser_charge.png",
         "effects/laser_impact.png", "effects/muzzle_flash.png", "effects/knife_slash.png"
@@ -194,6 +320,7 @@ void Game::LoadAnimationArtwork(const std::filesystem::path& directory) {
 
 void Game::DrawFacility() const {
     DrawTexture(facilityTexture_, 0, 0, WHITE);
+    DrawEnvironment();
     // Place bodies under props so cards and terminals remain readable.
     for (const Guard& guard : guards_) {
         if (!guard.IsAlive()) {
@@ -214,6 +341,26 @@ void Game::DrawFacility() const {
         }
         if (object.type != Assassin && object.type != GuardSpawn) {
             DrawCenteredSprite(sprites_[object.type], TileMap::TileCenter(object.tile), object.rotation, WHITE);
+        }
+    }
+}
+
+void Game::DrawEnvironment() const {
+    for (int layer = FloorDecal; layer <= SolidProp; ++layer) {
+        for (const EnvironmentPlacement& placement : environment_) {
+            const EnvironmentAsset& asset = EnvironmentAssets[placement.type];
+            if (asset.layer != layer) {
+                continue;
+            }
+            const float angle = placement.rotation * DEG2RAD;
+            const Vector2 center{
+                (placement.tile.column + placement.Width() / 2.0f) * TileMap::TileSize -
+                    asset.mountOffset * std::sin(angle),
+                (placement.tile.row + placement.Height() / 2.0f) * TileMap::TileSize +
+                    asset.mountOffset * std::cos(angle)
+            };
+            DrawCenteredSprite(environmentTextures_[placement.type], center,
+                               static_cast<float>(placement.rotation), WHITE);
         }
     }
 }
@@ -388,15 +535,6 @@ void Game::ResetRound() {
     accessMessage_ = "";
     accessMessageTime_ = 0.0f;
     // Three waypoints after each spawn, in the guard order from objects.txt.
-    constexpr TilePosition waypoints[GuardCount][3]{
-        {{20, 10}, {20, 11}, {25, 11}},
-        {{12, 23}, {12, 24}, {6, 24}},
-        {{33, 21}, {34, 21}, {34, 13}},
-        {{24, 17}, {24, 14}, {17, 14}},
-        {{39, 5}, {39, 2}, {44, 2}},
-        {{37, 26}, {38, 26}, {38, 32}},
-        {{7, 30}, {7, 32}, {5, 32}}
-    };
     guards_.clear();
     guards_.reserve(GuardCount + MaxReinforcements);
     int guardIndex = 0;
@@ -404,7 +542,7 @@ void Game::ResetRound() {
         if (object.type == Assassin) {
             player_.Spawn(TileMap::TileCenter(object.tile), object.rotation);
         } else if (object.type == GuardSpawn) {
-            const TilePosition* route = waypoints[guardIndex++];
+            const TilePosition* route = GuardWaypoints[guardIndex++];
             GuardType type = MELEE;
             if (object.tile == TilePosition{22, 17} || object.tile == TilePosition{43, 5}) {
                 type = LASER;
@@ -620,12 +758,7 @@ bool Game::SpawnReinforcement() {
     if (reinforcementCount_ >= MaxReinforcements) {
         return false;
     }
-    constexpr TilePosition patrols[][2]{
-        {{47, 3}, {47, 4}},
-        {{2, 24}, {3, 24}},
-        {{32, 11}, {31, 11}}
-    };
-    for (const auto& patrol : patrols) {
+    for (const auto& patrol : ReinforcementPatrols) {
         if (CanSpawnAt(patrol[0]) && !map_.IsWall(patrol[1])) {
             guards_.emplace_back(map_, pathfinder_,
                 std::initializer_list<TilePosition>{patrol[0], patrol[1]});
@@ -965,6 +1098,8 @@ void Game::DrawMinimap() const {
                 }
             } else if (map_.HasCrate(column, row)) {
                 color = Color{176, 121, 75, 255};
+            } else if (map_.HasSolidProp(column, row)) {
+                color = Color{132, 109, 80, 255};
             } else if (!map_.IsWall(column, row)) {
                 continue;
             }
@@ -1195,6 +1330,11 @@ void Game::DrawTerminal() const {
 }
 
 void Game::Shutdown() {
+    for (const Texture2D texture : environmentTextures_) {
+        if (texture.id != 0) {
+            UnloadTexture(texture);
+        }
+    }
     for (const CharacterFrames& frames : animationFrames_) {
         for (const Texture2D texture : frames.walk) {
             if (texture.id != 0) UnloadTexture(texture);

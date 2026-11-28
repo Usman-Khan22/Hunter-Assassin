@@ -60,7 +60,7 @@ void TileMap::LoadGrid(const std::filesystem::path& path, bool facility) {
         throw std::runtime_error("Map must be readable and contain exactly one spawn.");
     }
     tiles_.swap(tiles);
-    crates_.assign(Width() * Height(), 0);
+    occupancy_.assign(Width() * Height(), EmptyCell);
     doorIndex_.Clear();
     ResetDoors();
     ++walkabilityRevision_;
@@ -71,7 +71,15 @@ void TileMap::AddCrate(TilePosition tile) {
     if (IsWall(tile)) {
         throw std::runtime_error("A cargo crate must occupy a free floor tile.");
     }
-    crates_[tile.row * Width() + tile.column] = 1;
+    occupancy_[tile.row * Width() + tile.column] = CrateCell;
+}
+
+void TileMap::AddSolidProp(TilePosition tile) {
+    if (IsWall(tile) || DoorAt(tile) >= 0) {
+        throw std::runtime_error("A solid prop must occupy a free floor tile.");
+    }
+    occupancy_[tile.row * Width() + tile.column] = PropCell;
+    ++walkabilityRevision_;
 }
 
 Vector2 TileMap::Spawn() const { return spawn_; }
@@ -84,13 +92,22 @@ bool TileMap::IsWall(int column, int row) const {
 
 bool TileMap::HasCrate(int column, int row) const {
     return column >= 0 && row >= 0 && column < Width() && row < Height() &&
-           crates_[row * Width() + column] != 0;
+           occupancy_[row * Width() + column] == CrateCell;
+}
+
+bool TileMap::HasSolidProp(int column, int row) const {
+    return column >= 0 && row >= 0 && column < Width() && row < Height() &&
+           occupancy_[row * Width() + column] == PropCell;
+}
+
+bool TileMap::IsPermanentWall(TilePosition tile) const {
+    return tile.column >= 0 && tile.row >= 0 && tile.column < Width() && tile.row < Height() &&
+           (tiles_[tile.row][tile.column] == '#' || tiles_[tile.row][tile.column] == 'W');
 }
 
 bool TileMap::IsBlocked(int column, int row, int ignoredDoor) const {
     if (column < 0 || row < 0 || column >= Width() || row >= Height() ||
-        tiles_[row][column] == '#' || tiles_[row][column] == 'W' ||
-        crates_[row * Width() + column] != 0) {
+        IsPermanentWall({column, row}) || occupancy_[row * Width() + column] != EmptyCell) {
         return true;
     }
     const int door = doorIndex_.Find(row * Width() + column);
@@ -219,8 +236,10 @@ void TileMap::DrawGrid() const {
         for (int column = 0; column < Width(); ++column) {
             if (IsWall(column, row)) {
                 Color fill{255, 95, 75, 48};
-                if (crates_[row * Width() + column]) {
+                if (HasCrate(column, row)) {
                     fill = Color{255, 192, 75, 85};
+                } else if (HasSolidProp(column, row)) {
+                    fill = Color{199, 171, 130, 96};
                 }
                 DrawRectangle(column * TileSize, row * TileSize, TileSize, TileSize, fill);
             }
