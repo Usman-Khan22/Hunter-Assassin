@@ -82,6 +82,11 @@ bool TileMap::IsWall(int column, int row) const {
     return IsBlocked(column, row, -1);
 }
 
+bool TileMap::HasCrate(int column, int row) const {
+    return column >= 0 && row >= 0 && column < Width() && row < Height() &&
+           crates_[row * Width() + column] != 0;
+}
+
 bool TileMap::IsBlocked(int column, int row, int ignoredDoor) const {
     if (column < 0 || row < 0 || column >= Width() || row >= Height() ||
         tiles_[row][column] == '#' || tiles_[row][column] == 'W' ||

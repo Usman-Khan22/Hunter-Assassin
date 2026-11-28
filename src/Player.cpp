@@ -11,14 +11,18 @@ void Player::Spawn(Vector2 position, float rotation) {
     health_ = MaxHealth;
     immunity_ = 0.0f;
     exposure_ = 0.0f;
+    animation_.Start(CharacterPose::Idle);
+    knifeDirection_ = facing_;
 }
 
 // Normalize input before scaling by time, then resolve each axis to allow wall sliding.
 void Player::Update(float deltaTime, const TileMap& map, bool movementEnabled) {
+    AdvanceAnimation(deltaTime);
     if (immunity_ > 0.0f) {
         immunity_ -= deltaTime;
     }
     if (!movementEnabled) {
+        animation_.SetMovement(false);
         return;
     }
     const Vector2 input{
@@ -27,6 +31,7 @@ void Player::Update(float deltaTime, const TileMap& map, bool movementEnabled) {
     };
     const float length = std::hypot(input.x, input.y);
     if (length == 0.0f || deltaTime <= 0.0f) {
+        animation_.SetMovement(false);
         return;
     }
 
@@ -38,6 +43,7 @@ void Player::Update(float deltaTime, const TileMap& map, bool movementEnabled) {
     // Small substeps prevent tunneling and keep corner contact stable.
     const int steps = static_cast<int>(std::ceil(distance / (Radius * 0.25f)));
     const float stride = distance / steps;
+    const Vector2 before = position_;
     for (int step = 0; step < steps; ++step) {
         const Vector2 horizontal{position_.x + facing_.x * stride, position_.y};
         if (!map.CircleHitsWall(horizontal, Radius)) {
@@ -48,15 +54,23 @@ void Player::Update(float deltaTime, const TileMap& map, bool movementEnabled) {
             position_.y = vertical.y;
         }
     }
+    animation_.SetMovement(position_.x != before.x || position_.y != before.y);
 }
 
-void Player::Draw(Texture2D texture) const {
+void Player::Draw(Texture2D texture, const CharacterFrames* frames) const {
+    if (frames != nullptr) {
+        texture = animation_.Texture(*frames, texture);
+    }
     if (texture.id != 0) {
         Color tint = WHITE;
         if (immunity_ > 0.0f) {
             tint = Color{255, 155, 155, 255};
         }
-        DrawCenteredSprite(texture, position_, std::atan2(facing_.y, facing_.x) * RAD2DEG, tint);
+        Vector2 direction = facing_;
+        if (animation_.pose == CharacterPose::Attack) {
+            direction = knifeDirection_;
+        }
+        DrawCenteredSprite(texture, position_, std::atan2(direction.y, direction.x) * RAD2DEG, tint);
         return;
     }
     DrawCircleV(position_, Radius + 2.0f, Color{11, 20, 25, 255});
@@ -71,6 +85,8 @@ void Player::Draw(Texture2D texture) const {
 
 Vector2 Player::Position() const { return position_; }
 
+Vector2 Player::Facing() const { return facing_; }
+
 int Player::Health() const { return health_; }
 
 bool Player::IsExposed() const { return exposure_ > 0.0f; }
@@ -84,9 +100,26 @@ void Player::UpdateExposure(float deltaTime, bool detected) {
     }
 }
 
-void Player::TakeDamage() {
-    if (health_ > 0 && immunity_ <= 0.0f) {
-        --health_;
+void Player::TakeDamage(int damage) {
+    if (health_ > 0 && immunity_ <= 0.0f && damage > 0) {
+        health_ -= damage;
+        if (health_ < 0) {
+            health_ = 0;
+        }
+        if (health_ == 0) {
+            animation_.Start(CharacterPose::Death);
+        }
         immunity_ = ImmunityDuration;
     }
 }
+
+void Player::StartKnifeAnimation(Vector2 direction) {
+    knifeDirection_ = direction;
+    animation_.Start(CharacterPose::Attack);
+}
+
+void Player::AdvanceAnimation(float deltaTime) { animation_.Advance(deltaTime, 0.09f); }
+
+const CharacterAnimation& Player::Animation() const { return animation_; }
+
+Vector2 Player::KnifeDirection() const { return knifeDirection_; }

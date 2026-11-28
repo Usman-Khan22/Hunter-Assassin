@@ -45,6 +45,7 @@ public:
     int Width() const;
     int Height() const;
     bool IsWall(int column, int row) const;
+    bool HasCrate(int column, int row) const;
     bool IsWall(TilePosition tile) const { return IsWall(tile.column, tile.row); }
     bool CircleHitsWall(Vector2 center, float radius) const;
     bool HasClearLine(Vector2 from, Vector2 to) const;

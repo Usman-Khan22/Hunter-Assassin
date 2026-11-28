@@ -8,8 +8,8 @@
 
 // Validate every leg of the patrol loop, including the last leg back to the start.
 Guard::Guard(const TileMap& map, BfsPathfinder& pathfinder,
-             std::initializer_list<TilePosition> patrol)
-    : patrol_(patrol) {
+             std::initializer_list<TilePosition> patrol, GuardType type)
+    : patrol_(patrol), type_(type) {
     if (patrol_.size() < 2) {
         throw std::invalid_argument("A guard patrol needs at least two waypoints.");
     }
@@ -51,9 +51,11 @@ bool Guard::CanSee(Vector2 player, const TileMap& map) const {
 
 // Process this frame's visibility before taking the resulting state's action.
 void Guard::Update(float deltaTime, Vector2 player, const TileMap& map, BfsPathfinder& pathfinder) {
+    animation_.Advance(deltaTime, 0.11f);
     if (!IsAlive()) {
         return;
     }
+    const Vector2 before = position_;
     if (attackCooldown_ > 0.0f) {
         attackCooldown_ -= deltaTime;
     }
@@ -80,7 +82,14 @@ void Guard::Update(float deltaTime, Vector2 player, const TileMap& map, BfsPathf
         }
     }
 
-    const float patrolDistance = PatrolSpeed * deltaTime;
+    float movementFactor = 1.0f;
+    if (type_ == LASER) {
+        if (UpdateLaserAttack(deltaTime, player, map)) {
+            return;
+        }
+        movementFactor = LaserMovementFactor;
+    }
+    const float patrolDistance = PatrolSpeed * deltaTime * movementFactor;
     switch (state_) {
         case State::Patrol:
             if (Navigate(patrol_[waypoint_], patrolDistance, map, pathfinder) == Navigation::Arrived) {
@@ -90,7 +99,7 @@ void Guard::Update(float deltaTime, Vector2 player, const TileMap& map, BfsPathf
         case State::Suspicious:
             break;
         case State::Chase:
-            Navigate(lastKnown_, ChaseSpeed * deltaTime, map, pathfinder);
+            Navigate(lastKnown_, ChaseSpeed * deltaTime * movementFactor, map, pathfinder);
             break;
         case State::Search:
             if (Navigate(lastKnown_, patrolDistance, map, pathfinder) != Navigation::Moving) {
@@ -107,6 +116,97 @@ void Guard::Update(float deltaTime, Vector2 player, const TileMap& map, BfsPathf
                 state_ = State::Patrol;
             }
             break;
+    }
+    animation_.SetMovement(position_.x != before.x || position_.y != before.y);
+}
+
+GuardType Guard::Type() const { return type_; }
+
+bool Guard::IsCharging() const { return IsAlive() && chargeTime_ > 0.0f; }
+
+Vector2 Guard::LaserDirection() const { return lockedDirection_; }
+
+Vector2 Guard::LaserMuzzle(bool firing) const {
+    // The charge and fire poses use different muzzle offsets from the sprite center.
+    const float forward = firing ? 16.4f : 17.8f;
+    const float sideways = firing ? 10.9f : 10.3f;
+    return {position_.x + lockedDirection_.x * forward - lockedDirection_.y * sideways,
+            position_.y + lockedDirection_.y * forward + lockedDirection_.x * sideways};
+}
+
+void Guard::CancelLaserCharge() {
+    chargeTime_ = 0.0f;
+    laserShotReady_ = false;
+    if (animation_.pose == CharacterPose::Charge) {
+        animation_.Start(CharacterPose::Idle);
+    }
+}
+
+void Guard::PlayLaserShot() { animation_.Start(CharacterPose::Shoot); }
+
+bool Guard::TakeLaserShot(Vector2& origin, Vector2& direction) {
+    if (!IsAlive() || !laserShotReady_) {
+        return false;
+    }
+    laserShotReady_ = false;
+    origin = LaserMuzzle(true);
+    direction = lockedDirection_;
+    return true;
+}
+
+// Lock the direction once, then check visibility again without retargeting.
+bool Guard::UpdateLaserAttack(float deltaTime, Vector2 player, const TileMap& map) {
+    const float dx = player.x - position_.x;
+    const float dy = player.y - position_.y;
+    const float distance = std::hypot(dx, dy);
+    if (!IsChasing() || distance > LaserRange || !CanSee(player, map)) {
+        CancelLaserCharge();
+        return false;
+    }
+    if (IsCharging()) {
+        const Vector2 muzzle = LaserMuzzle(true);
+        if (!map.HasClearLine(muzzle, player)) {
+            CancelLaserCharge();
+            return false;
+        }
+        chargeTime_ -= deltaTime;
+        if (chargeTime_ <= 0.0f) {
+            chargeTime_ = 0.0f;
+            attackCooldown_ = LaserCooldown;
+            laserShotReady_ = true;
+            animation_.Start(CharacterPose::Idle);
+        }
+        return true;
+    }
+    if (attackCooldown_ > 0.0f) {
+        return false;
+    }
+    float angle = facingAngle_;
+    if (distance > 0.0f) {
+        angle = std::atan2(dy, dx);
+        if (distance > 22.0f) {
+            angle -= std::asin(10.9f / distance);
+        }
+    }
+    lockedDirection_ = {std::cos(angle), std::sin(angle)};
+    const Vector2 muzzle = LaserMuzzle(true);
+    if (!map.HasClearLine(position_, muzzle) || !map.HasClearLine(muzzle, player)) {
+        return false;
+    }
+    facingAngle_ = angle;
+    chargeTime_ = LaserChargeDuration;
+    animation_.Start(CharacterPose::Charge);
+    return true;
+}
+
+void Guard::Investigate(TilePosition target, const TileMap& map, BfsPathfinder& pathfinder) {
+    if (pathfinder.FindPath(map, tile_, target, path_)) {
+        lastKnown_ = target;
+        plannedTarget_ = target;
+        plannedRevision_ = map.WalkabilityRevision();
+        pathIndex_ = 0;
+        searchTime_ = 0.0f;
+        state_ = State::Search;
     }
 }
 
@@ -172,8 +272,14 @@ void Guard::DrawVision(const TileMap& map) const {
     }
 }
 
-void Guard::Draw(Texture2D texture) const {
+void Guard::Draw(Texture2D texture, const CharacterFrames* frames) const {
+    if (frames != nullptr) {
+        texture = animation_.Texture(*frames, texture);
+    }
     if (!IsAlive()) {
+        if (texture.id != 0) {
+            DrawCenteredSprite(texture, position_, facingAngle_ * RAD2DEG, WHITE);
+        }
         return;
     }
     if (attackEffect_ > 0.0f) {
@@ -181,7 +287,11 @@ void Guard::Draw(Texture2D texture) const {
                         AttackRange, Color{255, 112, 82, 255});
     }
     if (texture.id != 0) {
-        DrawCenteredSprite(texture, position_, facingAngle_ * RAD2DEG, WHITE);
+        float angle = facingAngle_;
+        if (animation_.pose == CharacterPose::Shoot) {
+            angle = std::atan2(lockedDirection_.y, lockedDirection_.x);
+        }
+        DrawCenteredSprite(texture, position_, angle * RAD2DEG, WHITE);
     } else {
         DrawCircleV(position_, Radius + 2.0f, AlertColor());
         DrawCircleV(position_, Radius, Color{191, 55, 66, 255});
@@ -224,6 +334,22 @@ void Guard::DrawDebug() const {
         DrawCircleLines(static_cast<int>(center.x), static_cast<int>(center.y), 7.0f, color);
     }
     DrawText(StateName(), static_cast<int>(position_.x) + 20, static_cast<int>(position_.y) - 6, 12, color);
+    if (type_ == LASER) {
+        const char* label = "LASER";
+        if (IsCharging()) {
+            label = "LASER CHARGING";
+        }
+        DrawText(TextFormat("%s %.2fs CD %.2fs", label, chargeTime_, std::max(attackCooldown_, 0.0f)),
+                 static_cast<int>(position_.x) + 20, static_cast<int>(position_.y) + 10, 12, color);
+        if (IsCharging()) {
+            DrawText(TextFormat("Aim %.2f, %.2f", lockedDirection_.x, lockedDirection_.y),
+                     static_cast<int>(position_.x) + 20, static_cast<int>(position_.y) + 24, 12, color);
+        }
+    } else {
+        DrawText("MELEE", static_cast<int>(position_.x) + 20, static_cast<int>(position_.y) + 10, 12, color);
+    }
+    DrawText(TextFormat("%s %d  %.2fs", animation_.Name(), animation_.frame + 1, animation_.elapsed),
+             static_cast<int>(position_.x) + 20, static_cast<int>(position_.y) + 38, 12, color);
 }
 
 Vector2 Guard::Position() const { return position_; }
@@ -259,13 +385,19 @@ void Guard::TakeKnifeHit(Vector2 attacker) {
     }
     if (ClassifyAttack(attacker) == AttackSide::Rear) {
         health_ = 0;
+        CancelLaserCharge();
+        animation_.Start(CharacterPose::Death);
         return;
     }
     --health_;
+    if (!IsAlive()) {
+        CancelLaserCharge();
+        animation_.Start(CharacterPose::Death);
+    }
     if (IsAlive()) {
         const float dx = attacker.x - position_.x;
         const float dy = attacker.y - position_.y;
-        if (dx != 0.0f || dy != 0.0f) {
+        if (!IsCharging() && (dx != 0.0f || dy != 0.0f)) {
             facingAngle_ = std::atan2(dy, dx);
         }
         lastKnown_ = TileMap::WorldTile(attacker);
@@ -275,7 +407,7 @@ void Guard::TakeKnifeHit(Vector2 attacker) {
 
 // A swing starts the guard's cooldown even when the player is immune.
 bool Guard::TryAttack(Vector2 player, const TileMap& map) {
-    if (!IsChasing() || attackCooldown_ > 0.0f) {
+    if (type_ != MELEE || !IsChasing() || attackCooldown_ > 0.0f) {
         return false;
     }
     const float distance = std::hypot(player.x - position_.x, player.y - position_.y);
@@ -284,5 +416,6 @@ bool Guard::TryAttack(Vector2 player, const TileMap& map) {
     }
     attackCooldown_ = AttackCooldown;
     attackEffect_ = 0.18f;
+    animation_.Start(CharacterPose::Attack);
     return true;
 }

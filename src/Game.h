@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BfsPathfinder.h"
+#include "EventHeap.h"
 #include "Guard.h"
 #include "Player.h"
 #include "TileMap.h"
@@ -19,10 +20,25 @@ private:
         TilePosition tile;
         float rotation;
     };
+    struct Projectile {
+        bool active;
+        Vector2 position;
+        Vector2 direction;
+        float speed;
+        float lifetime;
+        int damage;
+    };
+    struct LaserEffect {
+        Vector2 position;
+        float angle;
+        float remaining;
+        bool flash;
+    };
 
     void Initialize();
     void LoadObjects(const std::filesystem::path& path);
     void LoadArtwork(const std::filesystem::path& directory);
+    void LoadAnimationArtwork(const std::filesystem::path& directory);
     void DrawFacility() const;
     int CardIndex(TilePosition tile) const;
     TerminalId TerminalAt(TilePosition tile) const;
@@ -33,10 +49,22 @@ private:
     void EndMission(MissionState result);
     int SecondsRemaining() const;
     void DrawTimer() const;
+    void DrawMinimap() const;
+    void StartAlarm(double elapsed);
+    void ProcessEvents(double elapsed);
+    bool SpawnReinforcement();
+    bool CanSpawnAt(TilePosition tile) const;
+    void DrawAlarm() const;
     void DrawMissionResult() const;
     void ResetRound();
     void Update(float deltaTime);
     void AttackWithKnife();
+    void DamagePlayer(int damage);
+    bool SpawnProjectile(Vector2 origin, Vector2 direction);
+    void UpdateProjectiles(float deltaTime);
+    void AddLaserEffect(Vector2 position, float angle, bool flash);
+    void DrawLaserCombat() const;
+    void ClearLaserCombat();
     void Render() const;
     void Shutdown();
     Vector2 ClampCameraTarget(Vector2 target) const;
@@ -47,7 +75,20 @@ private:
     static constexpr float KnifeRange = 52.0f;
     static constexpr float KnifeCooldown = 0.45f;
     static constexpr int GuardCount = 7;
+    static constexpr int MaxReinforcements = 3;
+    static constexpr double ReinforcementDelay = 8.0;
+    static constexpr double AlarmDuration = 15.0;
+    static constexpr double AlarmCooldown = 30.0;
+    static constexpr double RetryDelay = 1.0;
+    static constexpr int MaxSpawnRetries = 3;
+    static constexpr int ProjectileCapacity = 32;
+    static constexpr float ProjectileSpeed = 480.0f;
+    static constexpr float ProjectileLifetime = 1.0f;
+    static constexpr int ProjectileDamage = 1;
     static constexpr int MissionDuration = 360;
+    static constexpr int MinimapTilePixels = 5;
+    static constexpr int MinimapMargin = 16;
+    static constexpr int MinimapPadding = 6;
     static constexpr const char* ObjectNames[ObjectTypeCount]{
         "assassin", "guard", "cargo_crate", "security_door", "exit_door", "security_terminal", "access_card"
     };
@@ -58,12 +99,16 @@ private:
     std::vector<FacilityObject> objects_;
     Texture2D facilityTexture_{};
     Texture2D sprites_[ObjectTypeCount]{};
+    enum LaserTexture { LaserGuardIdle, LaserProjectile, LaserCharge, LaserImpact, MuzzleFlash, KnifeSlash, LaserTextureCount };
+    Texture2D laserTextures_[LaserTextureCount]{};
+    enum AnimationKind { AssassinFrames, MeleeFrames, LaserFrames, AnimationKindCount };
+    CharacterFrames animationFrames_[AnimationKindCount]{};
+    Projectile projectiles_[ProjectileCapacity]{};
+    LaserEffect laserEffects_[ProjectileCapacity]{};
     Camera2D camera_{};
     bool debugVisible_ = false;
+    bool minimapVisible_ = true;
     float knifeCooldown_ = 0.0f;
-    float knifeEffect_ = 0.0f;
-    Vector2 knifeOrigin_{};
-    Vector2 knifeTarget_{};
     bool cards_[2]{};
     int nearbyDoor_ = -1;
     const char* accessMessage_ = "";
@@ -80,4 +125,13 @@ private:
     DefeatReason defeatReason_ = Eliminated;
     double timeRemaining_ = MissionDuration;
     int pendingExit_ = -1;
+    EventHeap events_;
+    bool alarmActive_ = false;
+    double nextAlarmTime_ = 0.0;
+    double reinforcementTime_ = -1.0;
+    int reinforcementCount_ = 0;
+    int spawnRetries_ = 0;
+    TilePosition alarmLocation_{};
+    const char* alarmNotice_ = "";
+    double alarmNoticeUntil_ = 0.0;
 };

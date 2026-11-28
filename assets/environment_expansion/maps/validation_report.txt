@@ -1,0 +1,10 @@
+DECORATION VALIDATION REPORT
+============================
+Reachable free tiles from player spawn (4, 4): before 1253, after 1157 (difference = 96 tiles now covered by solid props: 96)
+Objectives / spawns checked: 22 (cards, terminals, security + exit doors, guard spawns) - all reachable: True
+New 1-tile dead-end pockets created by props: 0
+Room floor tiles: 978, covered by new solid props: 96 (9.8%), corridor / doorway / narrow tiles used by solids: 0
+Doors were treated as open (unlocked) for reachability; crates and terminals as solid.
+Guard PATROL routes are not in the supplied files: only guard spawn tiles and their neighbours were kept clear. Patrol compatibility has NOT been verified.
+
+ERRORS: none
